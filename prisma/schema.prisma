@@ -1,0 +1,112 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+  output   = "../src/prisma/client"
+}
+
+// generator dbml {
+//   provider = "prisma-dbml-generator"
+// }
+
+datasource db {
+  provider = "sqlserver"
+  url = env("DATABASE_URL")
+}
+
+model ClicPage {
+  id Int @id  // page_nid
+  title String
+  content String
+  topic String
+  languageCode String
+  url String
+  contextualInformation String
+  lastUpdatedAt DateTime @updatedAt
+
+  referencingPages ClicPage[] @relation("ClicPageRelationToClicPage")
+  referencedByPages ClicPage[] @relation("ClicPageRelationToClicPage")
+  referencingLegislationSections LegislationSection[]
+  referencingCases Case[]
+
+  @@unique([url, languageCode])
+  @@index([url, languageCode])
+}
+
+model LegislationSection {
+  id String @id // cap_no/section_no or cap_no/section_no/subsection_no
+  parentLegislationCap LegislationCap @relation("ParentCap", fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
+  capNumber String
+  sectionHeading String
+  sectionNumber String
+  subsectionNumber String?
+  content String
+  languageCode String
+  url String
+  eLegislationUrl String
+
+  referencedByClicPages ClicPage[]
+  referencingLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
+  referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
+  referencingLegislationCaps LegislationCap[] @relation("LegislationSectionToLegislationCap")
+  referencedByCases Case[]
+  relatedInterpretations Interpretation[]
+
+  @@unique([capNumber, sectionNumber, subsectionNumber, languageCode])
+  @@index([capNumber, sectionNumber, subsectionNumber, languageCode])
+}
+
+model LegislationCap {
+  capNumber String @id
+  title String
+  longTitle String?
+  languageCode String
+  url String
+  eLegislationUrl String
+  enactmentDate DateTime
+
+  childSections LegislationSection[] @relation("ParentCap")
+  referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationCap")
+  referencedByCases Case[]
+  relatedInterpretations Interpretation[]
+
+  @@unique([capNumber, languageCode])
+  @@index([capNumber, languageCode])
+}
+
+
+model Interpretation {
+  id String @id // cap_no/term
+  term String
+  termDefinition String
+  languageCode String
+  
+  parentLegislationCap LegislationCap @relation(fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
+  capNumber String
+  sectionsContainingTerm LegislationSection[]
+
+  @@unique([capNumber, term, languageCode])
+  @@index([capNumber, term, languageCode])
+}
+
+
+model Case {
+  id String @id // courtName/caseYear/caseNumber
+  courtName String
+  caseYear Int
+  caseNumber Int
+  title String
+  content String
+  languageCode String
+  url String
+  judgmentDate DateTime
+
+  referencedByClicPages ClicPage[]
+  referencingLegislationSections LegislationSection[]
+  referencingLegislationCaps LegislationCap[]
+
+  @@unique([courtName, caseYear, caseNumber])
+  @@index([courtName, caseYear, caseNumber])
+}
