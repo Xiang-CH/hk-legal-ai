@@ -17,32 +17,34 @@ datasource db {
 }
 
 model ClicPage {
-  id Int @id  // page_nid
+  id Int @id // page_nid
   title String
-  content String
+  content String @db.Text
   topic String
   languageCode String
   url String
-  contextualInformation String
+  path String
+  contextualInformation String @db.Text
   lastUpdatedAt DateTime @updatedAt
 
   referencingPages ClicPage[] @relation("ClicPageRelationToClicPage")
   referencedByPages ClicPage[] @relation("ClicPageRelationToClicPage")
   referencingLegislationSections LegislationSection[]
+  referencingLegislationCaps LegislationCap[]
   referencingCases Case[]
 
-  @@unique([url, languageCode])
-  @@index([url, languageCode])
+  @@index([id, languageCode])
 }
 
 model LegislationSection {
   id String @id // cap_no/section_no or cap_no/section_no/subsection_no
   parentLegislationCap LegislationCap @relation("ParentCap", fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
+
   capNumber String
-  sectionHeading String
+  sectionHeading String?
   sectionNumber String
   subsectionNumber String?
-  content String
+  content String @db.Text
   languageCode String
   url String
   eLegislationUrl String
@@ -54,23 +56,24 @@ model LegislationSection {
   referencedByCases Case[]
   relatedInterpretations Interpretation[]
 
-  @@unique([capNumber, sectionNumber, subsectionNumber, languageCode])
+  @@unique([id, languageCode])
   @@index([capNumber, sectionNumber, subsectionNumber, languageCode])
 }
 
 model LegislationCap {
   capNumber String @id
-  title String
-  longTitle String?
+  title String?
+  longTitle String? @db.Text
   languageCode String
   url String
   eLegislationUrl String
-  enactmentDate DateTime
+  updatedAt DateTime @updatedAt
 
   childSections LegislationSection[] @relation("ParentCap")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationCap")
   referencedByCases Case[]
   relatedInterpretations Interpretation[]
+  referencedByClicPages ClicPage[]
 
   @@unique([capNumber, languageCode])
   @@index([capNumber, languageCode])
@@ -80,14 +83,14 @@ model LegislationCap {
 model Interpretation {
   id String @id // cap_no/term
   term String
-  termDefinition String
+  termDefinition String @db.Text
   languageCode String
   
   parentLegislationCap LegislationCap @relation(fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
   capNumber String
   sectionsContainingTerm LegislationSection[]
 
-  @@unique([capNumber, term, languageCode])
+  @@unique([id, languageCode])
   @@index([capNumber, term, languageCode])
 }
 
@@ -98,9 +101,10 @@ model Case {
   caseYear Int
   caseNumber Int
   title String
-  content String
+  content String @db.Text
   languageCode String
   url String
+  path String
   judgmentDate DateTime
 
   referencedByClicPages ClicPage[]
