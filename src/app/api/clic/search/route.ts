@@ -81,6 +81,8 @@ export async function POST(request: Request) {
             },
             include: {
                 referencingPages: true,
+                referencingLegislationSections: true,
+                referencingLegislationCaps: true,
             },
         });
 
