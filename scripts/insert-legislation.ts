@@ -1,6 +1,7 @@
-import { PrismaClient } from "../prisma/client/index.js";
+import { PrismaClient } from "../src/prisma/client/index.js";
 import fs from 'fs';
 import path from 'path';
+import { exit } from "process";
 const prisma = new PrismaClient();
 
 
@@ -116,11 +117,14 @@ async function insertLegislation() {
             // Check if the legislation already exists
             const existingCap = await prisma.legislationCap.findUnique({
                 where: {
-                    capNumber: data.cap_no,
+                    capNumber_languageCode: {
+                        capNumber: data.cap_no,
+                        languageCode: data.language,
+                    }
                 },
             });
             if (existingCap) {
-                console.log(`Legislation ${data.cap_no} already exists, skipping`);
+                // console.log(`Legislation ${data.cap_no} already exists, skipping`);
                 capSkipped += 1;
             } else {
                 await prisma.legislationCap.create({
@@ -144,7 +148,6 @@ async function insertLegislation() {
                 );
 
                 const interpretations = uniqueInterpretations.map((interpretation: any) => ({
-                    id: `${data.cap_no}/${interpretation.term}`,
                     term: interpretation.term,
                     termDefinition: interpretation.text,
                     languageCode: data.language,
@@ -154,24 +157,31 @@ async function insertLegislation() {
                 // Check if interpretations already exist
                 const existingInterpretations = await prisma.interpretation.findMany({
                     where: {
-                        id: {
-                            in: interpretations.map((interpretation: any) => interpretation.id),
-                        },
+                        term: { in: interpretations.map((interpretation: any) => interpretation.term)},
+                        capNumber: data.cap_no,
+                        languageCode: data.language,
                     },
                 });
-                const existingIds = existingInterpretations.map((interpretation) => interpretation.id);
-                const newInterpretations = interpretations.filter((interpretation: any) => !existingIds.includes(interpretation.id));
+                const existingTerms = existingInterpretations.map((interpretation) => interpretation.term);
+                const newInterpretations = interpretations.filter((interpretation: any) => !existingTerms.includes(interpretation.term));
 
-                await prisma.interpretation.createMany({
-                    data: newInterpretations,
-                });
+                try{
+                    await prisma.interpretation.createMany({
+                        data: newInterpretations,
+                    });
+                } catch (error) {
+                    console.error(`Error inserting interpretations for ${data.cap_no}:`, error);
+                    console.error(`Data:`, newInterpretations);
+                    console.error(`Existing IDs:`, existingTerms);
+                    process.exit(1);
+                }
             }
             
             // Insert sections
             if (data.sections && data.sections.length > 0) {
-                const subsections = data.sections.flatMap((section: any) =>
-                    section.subsections.map((subsection: any) => ({
-                        id: `${data.cap_no}/${section.name}/${subsection.name}`,
+                let subsections = data.sections.filter((section: any) => section.subsections && section.subsections.length > 0).flatMap((section: any) =>
+                    section.subsections.filter((subsection: any) => !!subsection).map((subsection: any) => ({
+                        path: `${data.cap_no}/${section.name}/${subsection.name}`,
                         capNumber: data.cap_no,
                         sectionHeading: section.heading,
                         sectionNumber: section.no? section.no : section.name.replace('s', ''),
@@ -183,8 +193,25 @@ async function insertLegislation() {
                     }))
                 );
 
+                if (subsections && subsections.length > 0) {
+                    
+                    // Check for duplicate IDs
+                    const idCounts = subsections.reduce((acc: {[key: string]: number}, section: any) => {
+                        acc[section.path] = (acc[section.path] || 0) + 1;
+                        return acc;
+                    }, {});
+
+                    const duplicateIds = Object.entries(idCounts)
+                        .filter(([_, count] : any) => count > 1)
+                        .map(([path] : any) => path);
+
+                    if (duplicateIds.length > 0) {
+                        subsections = [];  
+                    }
+                }
+
                 const sections = data.sections.map((section: any) => ({
-                    id: `${data.cap_no}/${section.name}`,
+                    path: `${data.cap_no}/${section.name}`,
                     capNumber: data.cap_no,
                     sectionHeading: section.heading,
                     sectionNumber: section.no? section.no : section.name.replace('s', ''),
@@ -199,16 +226,16 @@ async function insertLegislation() {
                 // Check if sections already exist
                 const existingSections = await prisma.legislationSection.findMany({
                     where: {
-                        id: {
-                            in: allSections.map((sec) => sec.id),
+                        path: {
+                            in: allSections.map((sec) => sec.path),
                         },
                     },
                 });
-                const existingSectionIds = existingSections.map((sec) => sec.id);
-                const newSections = allSections.filter((sec) => !existingSectionIds.includes(sec.id)).filter((sec) => sec.content && sec.content.trim() !== '');
+                const existingSectionIds = existingSections.map((sec) => sec.path);
+                const newSections = allSections.filter((sec) => !existingSectionIds.includes(sec.path)).filter((sec) => sec.content && sec.content.trim() !== '');
 
                 if (newSections.length === 0) {
-                    console.log(`All sections for ${data.cap_no} already exist, skipping section insertion`);
+                    // console.log(`All sections for ${data.cap_no} already exist, skipping section insertion`);
                     capSectionSkipped += sections.length;
                 } else {
                     console.log(`Inserting ${newSections.length} new sections for ${data.cap_no}`);
@@ -225,13 +252,14 @@ async function insertLegislation() {
 
             // Insert schedules
             if (data.schedules && data.schedules.length > 0) {
-                const sch_sections = data.schedules.flatMap((schedule: any) =>
-                    schedule.sections.map((section: any) => ({
-                        id: `${data.cap_no}/${schedule.name}/${section.name.split('_', 2)[1]}`,
+
+                let sch_sections = data.schedules.filter((schedule: any) => schedule.sections && schedule.sections.length > 0).flatMap((schedule: any) =>
+                    schedule.sections.filter((section: any) => !!section).map((section: any) => ({
+                        path: `${data.cap_no}/${schedule.name}/${section.name.split('_').slice(1).join('_')}`,
                         capNumber: data.cap_no,
                         sectionHeading: schedule.heading,
-                        sectionNumber: schedule.no,
-                        subsectionNumber: section.name,
+                        sectionNumber: schedule.name,
+                        subsectionNumber: section.name.split('_').slice(1).join('_'),
                         content: section.text,
                         languageCode: data.language,
                         url: schedule.url,
@@ -239,8 +267,25 @@ async function insertLegislation() {
                     }))
                 );
 
+                if (sch_sections && sch_sections.length > 0) {
+                    
+                    // Check for duplicate IDs
+                    const idCounts = sch_sections.reduce((acc: {[key: string]: number}, section: any) => {
+                        acc[section.path] = (acc[section.path] || 0) + 1;
+                        return acc;
+                    }, {});
+
+                    const duplicateIds = Object.entries(idCounts)
+                        .filter(([_, count] : any) => count > 1)
+                        .map(([path] : any) => path);
+
+                    if (duplicateIds.length > 0) {
+                        sch_sections = [];  
+                    }
+                }
+
                 const schedules = data.schedules.map((schedule: any) => ({
-                    id: `${data.cap_no}/${schedule.name}`,
+                    path: `${data.cap_no}/${schedule.name}`,
                     capNumber: data.cap_no,
                     sectionHeading: schedule.heading,
                     sectionNumber: schedule.name,
@@ -254,13 +299,13 @@ async function insertLegislation() {
                 // Check if schedules already exist
                 const existingSchedules = await prisma.legislationSection.findMany({
                     where: {
-                        id: {
-                            in: allSchedules.map((sch) => sch.id),
+                        path: {
+                            in: allSchedules.map((sch) => sch.path),
                         },
                     },
                 });
-                const existingScheduleIds = existingSchedules.map((sch) => sch.id); 
-                const newSchedules = allSchedules.filter((sch) => !existingScheduleIds.includes(sch.id));
+                const existingScheduleIds = existingSchedules.map((sch) => sch.path); 
+                const newSchedules = allSchedules.filter((sch) => !existingScheduleIds.includes(sch.path));
 
                 await prisma.legislationSection.createMany({
                     data: newSchedules,
@@ -278,7 +323,79 @@ async function insertLegislation() {
     return `Inserted ${capAdded} legislation caps, skipped ${capSkipped} caps, inserted ${capSectionAdded} sections, skipped ${capSectionSkipped} sections.`;
 }
 
-insertLegislation() 
+
+async function deleteAllInterpretations() {
+    try {
+        const result = await prisma.interpretation.deleteMany({});
+        console.log(`Deleted ${result.count} interpretations`);
+    } catch (error) {
+        console.error("Error deleting interpretations:", error);
+    }
+}
+
+async function deleteAllLegislationCaps() {
+    try {
+        const result = await prisma.legislationCap.deleteMany({});
+        console.log(`Deleted ${result.count} legislation caps`);
+    } catch (error) {
+        console.error("Error deleting legislation caps:", error);
+    }
+}
+
+async function deleteAllLegislationSections() {
+    try {
+        const result = await prisma.legislationSection.deleteMany({});
+        console.log(`Deleted ${result.count} legislation sections`);
+    } catch (error) {
+        console.error("Error deleting legislation sections:", error);
+    }
+}
+
+async function updateAppendixSections() {
+    try {
+        const sections = await prisma.legislationSection.findMany({
+            where: {
+                AND: [
+                    {
+                        sectionNumber: {
+                            contains: 'app',
+                        }
+                    },
+                    {
+                        sectionNumber: {
+                            contains: '_',
+                        }
+                    }
+                ]
+            },
+            select: {
+                id: true,
+                url: true,
+                sectionNumber: true,
+            },
+        });
+
+        for (const section of sections) {
+            // Update the URL to remove the "_app" suffix
+            const updatedUrl = section.url.split("_")[0];
+            await prisma.legislationSection.update({
+                where: {
+                    id: section.id,
+                },
+                data: {
+                    url: updatedUrl,
+                    sectionNumber: section.sectionNumber.split("_")[0],
+                },
+            });
+        }
+
+        console.log(`Updated ${sections.length} appendix sections`);
+    } catch (error) {
+        console.error("Error updating appendix sections:", error);
+    }
+}
+
+updateAppendixSections() 
     .then((res) => {
         console.log(res);
     })

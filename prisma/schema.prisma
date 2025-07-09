@@ -7,9 +7,9 @@ generator client {
   output   = "../src/prisma/client"
 }
 
-// generator dbml {
-//   provider = "prisma-dbml-generator"
-// }
+generator dbml {
+  provider = "prisma-dbml-generator"
+}
 
 datasource db {
   provider = "sqlserver"
@@ -17,14 +17,15 @@ datasource db {
 }
 
 model ClicPage {
-  id Int @id // page_nid
+  id Int @id @default(autoincrement())
+  nid Int // page_nid
   title String
-  content String @db.Text
+  content String @db.NVarChar(max)
   topic String
   languageCode String
   url String
   path String
-  contextualInformation String @db.Text
+  contextualInformation String @db.NVarChar(max)
   lastUpdatedAt DateTime @updatedAt
 
   referencingPages ClicPage[] @relation("ClicPageRelationToClicPage")
@@ -33,21 +34,23 @@ model ClicPage {
   referencingLegislationCaps LegislationCap[]
   referencingCases Case[]
 
-  @@index([id, languageCode])
+  @@unique([nid, languageCode])
+  @@index([nid, languageCode])
 }
 
 model LegislationSection {
-  id String @id // cap_no/section_no or cap_no/section_no/subsection_no
-  parentLegislationCap LegislationCap @relation("ParentCap", fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
+  id Int @id  @default(autoincrement())
+  path String // cap_no/section_no or cap_no/section_no/subsection_no
+  parentLegislationCap LegislationCap @relation("ParentCap", fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
 
   capNumber String
   sectionHeading String?
   sectionNumber String
   subsectionNumber String?
-  content String @db.Text
+  content String @db.NVarChar(max)
   languageCode String
   url String
-  eLegislationUrl String
+  eLegislationUrl String?
 
   referencedByClicPages ClicPage[]
   referencingLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
@@ -61,12 +64,13 @@ model LegislationSection {
 }
 
 model LegislationCap {
-  capNumber String @id
+  id Int @id @default(autoincrement())
+  capNumber String
   title String?
-  longTitle String? @db.Text
+  longTitle String? @db.NVarChar(max)
   languageCode String
   url String
-  eLegislationUrl String
+  eLegislationUrl String?
   updatedAt DateTime @updatedAt
 
   childSections LegislationSection[] @relation("ParentCap")
@@ -81,36 +85,35 @@ model LegislationCap {
 
 
 model Interpretation {
-  id String @id // cap_no/term
+  id Int @id @default(autoincrement())
   term String
-  termDefinition String @db.Text
+  termDefinition String @db.NVarChar(max)
   languageCode String
   
-  parentLegislationCap LegislationCap @relation(fields: [capNumber], references: [capNumber], onDelete: NoAction, onUpdate: NoAction)
+  parentLegislationCap LegislationCap @relation(fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
   capNumber String
   sectionsContainingTerm LegislationSection[]
 
-  @@unique([id, languageCode])
   @@index([capNumber, term, languageCode])
 }
 
 
 model Case {
-  id String @id // courtName/caseYear/caseNumber
+  id Int @id @default(autoincrement())
+  path String // courtName/caseYear/caseNumber
   courtName String
   caseYear Int
   caseNumber Int
   title String
-  content String @db.Text
+  content String @db.NVarChar(max)
   languageCode String
   url String
-  path String
   judgmentDate DateTime
 
   referencedByClicPages ClicPage[]
   referencingLegislationSections LegislationSection[]
   referencingLegislationCaps LegislationCap[]
 
-  @@unique([courtName, caseYear, caseNumber])
-  @@index([courtName, caseYear, caseNumber])
+  @@unique([courtName, caseYear, caseNumber, languageCode])
+  @@index([courtName, caseYear, caseNumber, languageCode])
 }

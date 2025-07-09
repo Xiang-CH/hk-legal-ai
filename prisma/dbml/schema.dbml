@@ -1,0 +1,148 @@
+//// ------------------------------------------------------
+//// THIS FILE WAS AUTOMATICALLY GENERATED (DO NOT MODIFY)
+//// ------------------------------------------------------
+
+Table ClicPage {
+  id Int [pk, increment]
+  nid Int [not null]
+  title String [not null]
+  content String [not null]
+  topic String [not null]
+  languageCode String [not null]
+  url String [not null]
+  path String [not null]
+  contextualInformation String [not null]
+  lastUpdatedAt DateTime [not null]
+  referencingPages ClicPage [not null]
+  referencedByPages ClicPage [not null]
+  referencingLegislationSections LegislationSection [not null]
+  referencingLegislationCaps LegislationCap [not null]
+  referencingCases Case [not null]
+
+  indexes {
+    (nid, languageCode) [unique]
+  }
+}
+
+Table LegislationSection {
+  id Int [pk, increment]
+  path String [not null]
+  parentLegislationCap LegislationCap [not null]
+  capNumber String [not null]
+  sectionHeading String
+  sectionNumber String [not null]
+  subsectionNumber String
+  content String [not null]
+  languageCode String [not null]
+  url String [not null]
+  eLegislationUrl String
+  referencedByClicPages ClicPage [not null]
+  referencingLegislationSections LegislationSection [not null]
+  referencedByLegislationSections LegislationSection [not null]
+  referencingLegislationCaps LegislationCap [not null]
+  referencedByCases Case [not null]
+  relatedInterpretations Interpretation [not null]
+
+  indexes {
+    (id, languageCode) [unique]
+  }
+}
+
+Table LegislationCap {
+  id Int [pk, increment]
+  capNumber String [not null]
+  title String
+  longTitle String
+  languageCode String [not null]
+  url String [not null]
+  eLegislationUrl String
+  updatedAt DateTime [not null]
+  childSections LegislationSection [not null]
+  referencedByLegislationSections LegislationSection [not null]
+  referencedByCases Case [not null]
+  relatedInterpretations Interpretation [not null]
+  referencedByClicPages ClicPage [not null]
+
+  indexes {
+    (capNumber, languageCode) [unique]
+  }
+}
+
+Table Interpretation {
+  id Int [pk, increment]
+  term String [not null]
+  termDefinition String [not null]
+  languageCode String [not null]
+  parentLegislationCap LegislationCap [not null]
+  capNumber String [not null]
+  sectionsContainingTerm LegislationSection [not null]
+}
+
+Table Case {
+  id Int [pk, increment]
+  path String [not null]
+  courtName String [not null]
+  caseYear Int [not null]
+  caseNumber Int [not null]
+  title String [not null]
+  content String [not null]
+  languageCode String [not null]
+  url String [not null]
+  judgmentDate DateTime [not null]
+  referencedByClicPages ClicPage [not null]
+  referencingLegislationSections LegislationSection [not null]
+  referencingLegislationCaps LegislationCap [not null]
+
+  indexes {
+    (courtName, caseYear, caseNumber, languageCode) [unique]
+  }
+}
+
+Table ClicPageRelationToClicPage {
+  referencingpagesId Int [ref: > ClicPage.id]
+  referencedbypagesId Int [ref: > ClicPage.id]
+}
+
+Table ClicPageToLegislationSection {
+  referencinglegislationsectionsId Int [ref: > LegislationSection.id]
+  referencedbyclicpagesId Int [ref: > ClicPage.id]
+}
+
+Table ClicPageToLegislationCap {
+  referencinglegislationcapsId Int [ref: > LegislationCap.id]
+  referencedbyclicpagesId Int [ref: > ClicPage.id]
+}
+
+Table CaseToClicPage {
+  referencingcasesId Int [ref: > Case.id]
+  referencedbyclicpagesId Int [ref: > ClicPage.id]
+}
+
+Table LegislationSectionToLegislationSection {
+  referencinglegislationsectionsId Int [ref: > LegislationSection.id]
+  referencedbylegislationsectionsId Int [ref: > LegislationSection.id]
+}
+
+Table LegislationSectionToLegislationCap {
+  referencinglegislationcapsId Int [ref: > LegislationCap.id]
+  referencedbylegislationsectionsId Int [ref: > LegislationSection.id]
+}
+
+Table CaseToLegislationSection {
+  referencedbycasesId Int [ref: > Case.id]
+  referencinglegislationsectionsId Int [ref: > LegislationSection.id]
+}
+
+Table InterpretationToLegislationSection {
+  relatedinterpretationsId Int [ref: > Interpretation.id]
+  sectionscontainingtermId Int [ref: > LegislationSection.id]
+}
+
+Table CaseToLegislationCap {
+  referencedbycasesId Int [ref: > Case.id]
+  referencinglegislationcapsId Int [ref: > LegislationCap.id]
+}
+
+Ref: LegislationSection.(capNumber, languageCode) > LegislationCap.(capNumber, languageCode) [delete: No Action]
+
+Ref: Interpretation.(capNumber, languageCode) > LegislationCap.(capNumber, languageCode) [delete: No Action]

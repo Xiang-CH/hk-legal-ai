@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
-    "build": "next build",
+    "build": "./build.sh && next build",
+    "postinstall": "pnpm prisma generate",
     "start": "next start",
     "lint": "next lint",
     "db:generate": "prisma generate",
@@ -13,9 +14,12 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
+    "@azure/search-documents": "^12.1.0",
+    "@langchain/textsplitters": "^0.1.0",
     "@prisma/adapter-mssql": "^6.11.0",
-    "@prisma/client": "6.11.0",
+    "js-tiktoken": "^1.0.20",
     "next": "15.3.4",
+    "openai": "^5.8.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -27,7 +31,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
-    "prisma": "6.11.0",
+    "prisma": "^6",
     "prisma-dbml-generator": "^0.12.0",
     "tailwindcss": "^4",
     "typescript": "^5"
