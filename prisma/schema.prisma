@@ -32,7 +32,7 @@ model ClicPage {
   referencedByPages ClicPage[] @relation("ClicPageRelationToClicPage")
   referencingLegislationSections LegislationSection[]
   referencingLegislationCaps LegislationCap[]
-  referencingCases Case[]
+  referencingJudgments Judgment[]
 
   @@unique([nid, languageCode])
   @@index([nid, languageCode])
@@ -56,7 +56,7 @@ model LegislationSection {
   referencingLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
   referencingLegislationCaps LegislationCap[] @relation("LegislationSectionToLegislationCap")
-  referencedByCases Case[]
+  referencedByJudgments Judgment[]
   relatedInterpretations Interpretation[]
 
   @@unique([id, languageCode])
@@ -75,7 +75,7 @@ model LegislationCap {
 
   childSections LegislationSection[] @relation("ParentCap")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationCap")
-  referencedByCases Case[]
+  referencedByJudgments Judgment[]
   relatedInterpretations Interpretation[]
   referencedByClicPages ClicPage[]
 
@@ -97,23 +97,42 @@ model Interpretation {
   @@index([capNumber, term, languageCode])
 }
 
-
-model Case {
-  id Int @id @default(autoincrement())
-  path String // courtName/caseYear/caseNumber
+model Judgment {
+  id Int @id
+  neutralCitation String
   courtName String
-  caseYear Int
-  caseNumber Int
-  title String
-  content String @db.NVarChar(max)
+  year Int
+  number Int
+  date DateTime
   languageCode String
+  isTranslation Boolean
+  coram String
+  parties String
+  representations String?
+  charges String?
+  remarks String?
+  summary String?
+  legalrefUrl String
   url String
-  judgmentDate DateTime
+  citationIndex Int?
 
+  cases Case[]
   referencedByClicPages ClicPage[]
   referencingLegislationSections LegislationSection[]
   referencingLegislationCaps LegislationCap[]
-
-  @@unique([courtName, caseYear, caseNumber, languageCode])
-  @@index([courtName, caseYear, caseNumber, languageCode])
+  referencingJudgments Judgment[] @relation("JudgmentToJudgment")
+  referencedByJudgments Judgment[] @relation("JudgmentToJudgment")
 }
+
+model Case {
+  id Int @id
+  caseAct String
+  year Int
+  number Int
+  title String
+  cjrId Int
+  cjrDis Int
+
+  judgment Judgment @relation(fields: [judgmentId], references: [id])
+  judgmentId Int
+} 

@@ -214,7 +214,7 @@ async function insertClicLegislationRelations() {
     for (const page in data) {
         const currentPage = data[page].nid;
         const legislationRefs = data[page].legislation_ref.filter(
-            (ref: any) => ref.type && ref.no
+            (ref: any) => ref.type && ref.no && ref.section
         ); // Ensure references have type and no
 
         if (legislationRefs.length === 0) continue;

@@ -25,8 +25,9 @@ const checkDatabaseManagementStatus = async (): Promise<string | undefined> => {
     const database = await client.databases.get(resourceGroupName, serverName, databaseName);
 
     // Try to wake up the database if it's paused
+    console.log(`Current database status: ${database.status}`);
     if (database.status == "Paused") {
-      prisma.$connect().catch((error) => {
+      testDatabaseConnection().catch((error) => {
         console.error("Prisma connection error:", error.message);
       });
       setTimeout(async () => {
