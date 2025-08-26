@@ -47,7 +47,8 @@ const checkDatabaseManagementStatus = async (): Promise<string | undefined> => {
 const testDatabaseConnection = async (): Promise<boolean> => {
   try {
     // Run a simple raw query to test connectivity
-    await prisma.$queryRaw`SELECT 1 AS test`;
+    // await prisma.$queryRaw`SELECT 1 AS test`;
+    await prisma.$connect();
     return true;
   } catch {
     return false;
