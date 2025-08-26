@@ -1,4 +1,3 @@
-import { captureOwnerStack } from "react";
 import { PrismaClient } from "../src/prisma/client/index.js";
 const prisma = new PrismaClient();
 

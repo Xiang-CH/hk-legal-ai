@@ -17,7 +17,7 @@ Table ClicPage {
   referencedByPages ClicPage [not null]
   referencingLegislationSections LegislationSection [not null]
   referencingLegislationCaps LegislationCap [not null]
-  referencingCases Case [not null]
+  referencingJudgments Judgment [not null]
 
   indexes {
     (nid, languageCode) [unique]
@@ -40,7 +40,7 @@ Table LegislationSection {
   referencingLegislationSections LegislationSection [not null]
   referencedByLegislationSections LegislationSection [not null]
   referencingLegislationCaps LegislationCap [not null]
-  referencedByCases Case [not null]
+  referencedByJudgments Judgment [not null]
   relatedInterpretations Interpretation [not null]
 
   indexes {
@@ -59,7 +59,7 @@ Table LegislationCap {
   updatedAt DateTime [not null]
   childSections LegislationSection [not null]
   referencedByLegislationSections LegislationSection [not null]
-  referencedByCases Case [not null]
+  referencedByJudgments Judgment [not null]
   relatedInterpretations Interpretation [not null]
   referencedByClicPages ClicPage [not null]
 
@@ -78,24 +78,52 @@ Table Interpretation {
   sectionsContainingTerm LegislationSection [not null]
 }
 
-Table Case {
-  id Int [pk, increment]
-  path String [not null]
+Table Judgment {
+  id Int [pk]
+  neutralCitation String [not null]
   courtName String [not null]
-  caseYear Int [not null]
-  caseNumber Int [not null]
-  title String [not null]
-  content String [not null]
+  year Int [not null]
+  number Int [not null]
+  date DateTime [not null]
   languageCode String [not null]
+  isTranslation Boolean [not null]
+  coram String
+  parties String
+  representations String
+  charges String
+  remarks String
+  summary String
+  summarySource String
+  legalrefUrl String [not null]
   url String [not null]
-  judgmentDate DateTime [not null]
+  citationIndex Int
+  cases Case [not null]
   referencedByClicPages ClicPage [not null]
   referencingLegislationSections LegislationSection [not null]
   referencingLegislationCaps LegislationCap [not null]
+  referencingJudgments Judgment [not null]
+  referencedByJudgments Judgment [not null]
+  parallelCitations ParallelCitations [not null]
+}
 
-  indexes {
-    (courtName, caseYear, caseNumber, languageCode) [unique]
-  }
+Table ParallelCitations {
+  id Int [pk]
+  citation String [not null]
+  languageCode String [not null]
+  judgment Judgment [not null]
+  judgmentId Int [not null]
+}
+
+Table Case {
+  id Int [pk]
+  caseAct String [not null]
+  actType String [not null]
+  year Int [not null]
+  number Int [not null]
+  title String [not null]
+  cjrId Int [not null]
+  cjrDis Int [not null]
+  judgments Judgment [not null]
 }
 
 Table ClicPageRelationToClicPage {
@@ -113,8 +141,8 @@ Table ClicPageToLegislationCap {
   referencedbyclicpagesId Int [ref: > ClicPage.id]
 }
 
-Table CaseToClicPage {
-  referencingcasesId Int [ref: > Case.id]
+Table ClicPageToJudgment {
+  referencingjudgmentsId Int [ref: > Judgment.id]
   referencedbyclicpagesId Int [ref: > ClicPage.id]
 }
 
@@ -128,8 +156,8 @@ Table LegislationSectionToLegislationCap {
   referencedbylegislationsectionsId Int [ref: > LegislationSection.id]
 }
 
-Table CaseToLegislationSection {
-  referencedbycasesId Int [ref: > Case.id]
+Table JudgmentToLegislationSection {
+  referencedbyjudgmentsId Int [ref: > Judgment.id]
   referencinglegislationsectionsId Int [ref: > LegislationSection.id]
 }
 
@@ -138,11 +166,23 @@ Table InterpretationToLegislationSection {
   sectionscontainingtermId Int [ref: > LegislationSection.id]
 }
 
-Table CaseToLegislationCap {
-  referencedbycasesId Int [ref: > Case.id]
+Table JudgmentToLegislationCap {
+  referencedbyjudgmentsId Int [ref: > Judgment.id]
   referencinglegislationcapsId Int [ref: > LegislationCap.id]
+}
+
+Table CaseToJudgment {
+  casesId Int [ref: > Case.id]
+  judgmentsId Int [ref: > Judgment.id]
+}
+
+Table JudgmentToJudgment {
+  referencingjudgmentsId Int [ref: > Judgment.id]
+  referencedbyjudgmentsId Int [ref: > Judgment.id]
 }
 
 Ref: LegislationSection.(capNumber, languageCode) > LegislationCap.(capNumber, languageCode) [delete: No Action]
 
 Ref: Interpretation.(capNumber, languageCode) > LegislationCap.(capNumber, languageCode) [delete: No Action]
+
+Ref: ParallelCitations.judgmentId > Judgment.id

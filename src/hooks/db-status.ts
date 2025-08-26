@@ -21,8 +21,8 @@ const fetchDatabaseStatus = async (): Promise<DatabaseStatus | null> => {
   }
 };
 
-// 2 minutes idle timeout
-const IDLE_TIMEOUT_MS = 1 * 60 * 1000; // 120000
+// Idle timeout
+const IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 180000
 
 // Hook for continuous database monitoring with idle pause/resume
 export const useDatabaseStatus = (

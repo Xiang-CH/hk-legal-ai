@@ -1,7 +1,6 @@
 import { PrismaClient } from "../src/prisma/client/index.js";
 import fs from 'fs';
 import path from 'path';
-import { exit } from "process";
 const prisma = new PrismaClient();
 
 

@@ -22,7 +22,7 @@ model ClicPage {
   title String
   content String @db.NVarChar(max)
   topic String
-  languageCode String
+  languageCode String // "en", "sc", "tc"
   url String
   path String
   contextualInformation String @db.NVarChar(max)
@@ -48,7 +48,7 @@ model LegislationSection {
   sectionNumber String
   subsectionNumber String?
   content String @db.NVarChar(max)
-  languageCode String
+  languageCode String // "en", "sc", "tc"
   url String
   eLegislationUrl String?
 
@@ -68,7 +68,7 @@ model LegislationCap {
   capNumber String
   title String?
   longTitle String? @db.NVarChar(max)
-  languageCode String
+  languageCode String // "en", "sc", "tc"
   url String
   eLegislationUrl String?
   updatedAt DateTime @updatedAt
@@ -88,7 +88,7 @@ model Interpretation {
   id Int @id @default(autoincrement())
   term String
   termDefinition String @db.NVarChar(max)
-  languageCode String
+  languageCode String // "en", "sc", "tc"
   
   parentLegislationCap LegislationCap @relation(fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
   capNumber String
@@ -104,35 +104,44 @@ model Judgment {
   year Int
   number Int
   date DateTime
-  languageCode String
+  languageCode String // "en", "sc", "tc"
   isTranslation Boolean
-  coram String
-  parties String
-  representations String?
-  charges String?
-  remarks String?
-  summary String?
+  coram String ? @db.NVarChar(max)
+  parties String? @db.NVarChar(max)
+  representations String? @db.NVarChar(max)
+  charges String? @db.NVarChar(max)
+  remarks String? @db.NVarChar(max)
+  summary String? @db.NVarChar(max)
+  summarySource String? // e.g. "GENERATED", "DOJ", "TEXTBOOK"
   legalrefUrl String
   url String
   citationIndex Int?
-
   cases Case[]
   referencedByClicPages ClicPage[]
   referencingLegislationSections LegislationSection[]
   referencingLegislationCaps LegislationCap[]
   referencingJudgments Judgment[] @relation("JudgmentToJudgment")
   referencedByJudgments Judgment[] @relation("JudgmentToJudgment")
+  parallelCitations ParallelCitations[]
+}
+
+model ParallelCitations {
+  id Int @id
+  citation String
+  languageCode String // "en", "sc", "tc"
+  judgment Judgment @relation(fields: [judgmentId], references: [id])
+  judgmentId Int
 }
 
 model Case {
   id Int @id
   caseAct String
+  actType String
   year Int
   number Int
   title String
   cjrId Int
   cjrDis Int
 
-  judgment Judgment @relation(fields: [judgmentId], references: [id])
-  judgmentId Int
+  judgments Judgment[]
 } 
