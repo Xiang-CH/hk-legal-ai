@@ -40,18 +40,11 @@ const prisma = new PrismaClient({
 	},
 });
 
-// Set a timeout for database operations
-prisma.$use(async (params, next) => {
-	const timeout = new Promise((_, reject) =>
-		setTimeout(() => reject(new Error('Database query timeout')), 10000) // 10 second timeout
-	);
-	
-	try {
-		return await Promise.race([next(params), timeout]);
-	} catch (error) {
-		throw error;
-	}
-});
+/**
+ * Note: Prisma middlewares ($use) are not available in the current client types.
+ * We handle timeouts per-query instead of using prisma.$use middleware.
+ */
+
 const searchClicClient = new SearchClient(
 	process.env.AZURE_SEARCH_ENDPOINT,
 	process.env.CLIC_INDEX_NAME,
@@ -120,9 +113,10 @@ export async function POST(req: Request) {
 			if (clicNidsToSearch.length > 0) {
 				try {
 					const startTime = Date.now();
-					const sqlSearchResults = await prisma.clicPage.findMany({
+					// Per-query timeout (10s) instead of global middleware
+					const queryPromise = prisma.clicPage.findMany({
 						where: {
-							nid: { 
+							nid: {
 								in: clicNidsToSearch,
 							},
 						},
@@ -144,6 +138,12 @@ export async function POST(req: Request) {
 							}
 						}
 					});
+					const sqlSearchResults = await Promise.race([
+						queryPromise,
+						new Promise<never>((_, reject) =>
+							setTimeout(() => reject(new Error('Database query timeout')), 10000)
+						),
+					]);
 
 					const queryTime = Date.now() - startTime;
 					// console.log(`SQL Result`, sqlSearchResults);
