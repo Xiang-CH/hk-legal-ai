@@ -97,6 +97,7 @@ Table Judgment {
   legalrefUrl String [not null]
   url String [not null]
   citationIndex Int
+  inTextbook Boolean [not null, default: false]
   cases Case [not null]
   referencedByClicPages ClicPage [not null]
   referencingLegislationSections LegislationSection [not null]
@@ -116,7 +117,7 @@ Table ParallelCitations {
 
 Table Case {
   id Int [pk]
-  caseAct String [not null]
+  caseAct String [unique, not null]
   actType String [not null]
   year Int [not null]
   number Int [not null]

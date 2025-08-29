@@ -1,12 +1,14 @@
 "use client";
 
-import type { UIMessage } from "ai";
 import { motion } from "framer-motion";
 
 import { SparklesIcon } from "./icons";
 import { Markdown } from "./markdown";
 import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
+import { useDevMode } from "@/hooks/use-dev-mode";
+import type { MyUIMessage } from "@/lib/types";
+import { inputCostPerToken, outputCostPerToken, cachedInputCostPerToken } from "@/lib/pricing";
 // import { Weather } from "./weather";
 // import { Citation } from "./citation";
 
@@ -15,9 +17,10 @@ import React from "react";
 const PreviewMessage = React.forwardRef<
   HTMLDivElement,
   {
-    message: UIMessage;
+    message: MyUIMessage;
   }
 >(({ message }, ref) => {
+  const { isDevMode } = useDevMode();
   if (message.parts.length === 0) return null;
   if (message.parts.filter((part) => part.type === "text").join("").length === 0) return null;
 
@@ -82,6 +85,21 @@ const PreviewMessage = React.forwardRef<
               }
               return null;
             })}
+
+          {/* Display usage information if available */}
+          {message.role === "assistant" && isDevMode && message.metadata?.usage && (
+            <div className="flex gap-2 w-full max-w-full flex-wrap text-gray-500 text-xs mt-2">
+
+              <span>Input Tokens: {message.metadata.usage.inputTokens} (${((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken).toFixed(8)})</span>
+              <span>Output Tokens: {message.metadata.usage.outputTokens} (${((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken).toFixed(8)})</span>
+              {
+                message.metadata.usage.cachedInputTokens && message.metadata.usage.cachedInputTokens > 0 && (
+                  <span>Cached Input Tokens: {message.metadata.usage.cachedInputTokens} (${(message.metadata.usage.cachedInputTokens * cachedInputCostPerToken).toFixed(8)})</span>
+              )}
+              <span>Total Tokens: {message.metadata.usage.totalTokens}</span>
+              <span>Total Cost: ${(((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken) + ((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken) + ((message.metadata.usage.cachedInputTokens ?? 0) * cachedInputCostPerToken)).toFixed(8)}</span>
+            </div>
+          )}
 
           {/* {message.role === "assistant" && urlsInContent && (
             <div className="flex gap-2 w-full max-w-full flex-wrap">

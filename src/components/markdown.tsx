@@ -86,7 +86,7 @@ const NonMemoizedMarkdown = ({ children }: { children: string }) => {
                 /> 
               : props.href?.includes("gov.hk") ?
                 <img
-                  src="/gov-hk-logo.png"
+                  src="/hk-gov-logo.png"
                   alt="Gov HK Logo"
                   className="size-5 shrink-0"
                 />

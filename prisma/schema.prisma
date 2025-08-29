@@ -116,6 +116,7 @@ model Judgment {
   legalrefUrl String
   url String
   citationIndex Int?
+  inTextbook Boolean @default(false)
   cases Case[]
   referencedByClicPages ClicPage[]
   referencingLegislationSections LegislationSection[]
@@ -135,7 +136,7 @@ model ParallelCitations {
 
 model Case {
   id Int @id
-  caseAct String
+  caseAct String @unique
   actType String
   year Int
   number Int

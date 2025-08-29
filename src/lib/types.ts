@@ -52,6 +52,12 @@ const metadataSchema = z.object({
   searchQuery: z.string().optional(),
   groundings: groundingsSchema.optional(),
   searchQueries: z.array(z.string()).optional(),
+  usage: z.object({
+    inputTokens: z.number().optional(),
+    outputTokens: z.number().optional(),
+    totalTokens: z.number().optional(),
+    cachedInputTokens: z.number().optional(),
+  }).optional(),
 });
 
 type MyMetadata = z.infer<typeof metadataSchema>;

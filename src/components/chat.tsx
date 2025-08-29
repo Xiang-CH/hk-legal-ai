@@ -43,6 +43,9 @@ export function Chat() {
         );
       }
     },
+    onFinish: (data) => {
+      console.log(data);
+    }
   });
 
   const [messagesContainerRef, scrollToElement] =
@@ -51,7 +54,7 @@ export function Chat() {
   useEffect(() => {
     if (messages.length === 0) return;
 
-    console.log(messages)
+    // console.log(messages)
 
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role === "user") {
@@ -87,10 +90,10 @@ export function Chat() {
       )}
 
 
-      <div className={cn("flex flex-col min-w-0 bg-background scrollbar w-full h-full overflow-y-auto", "max-w-3xl")}>
+      <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-y-auto", "max-w-3xl")}>
         <div
           ref={messagesContainerRef}
-          className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-scroll pt-4 pb-36"
+          className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-auto pt-4 pb-36"
         >
           {messages.length === 0 && <Overview />}
 

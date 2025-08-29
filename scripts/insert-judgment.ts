@@ -33,6 +33,33 @@ async function insertParallelCitations() {
     })
 }
 
+async function findJudgmentWithoutCase() {
+    const judgments = await prisma.judgment.findMany({
+        where: {
+            cases: {
+                none: {}
+            }
+        }
+    });
+    console.log(`Number of judgments without case: ${judgments.length}`);
+
+    for (const judgment of judgments) {
+        const result = await prisma.case.findMany({
+            where: {
+                judgments: {
+                    some: {
+                        id: judgment.id
+                    }
+                }
+            }
+        });
+
+        if (result.length == 0) {
+            console.log(`- Judgment ID: ${judgment.id}`);
+        }
+    }
+}
+
 async function insertCases() {
     const data = fs.readFileSync(CASE_DATA_PATH, 'utf-8')
     const row = JSON.parse(data);
@@ -90,6 +117,80 @@ async function insertCases() {
     }
 }
 
+
+const TEXTBOOK_DATA_PATH = "/Users/cxiang/Projects/hk-legislation-parsing/judgement/data/table_of_cases.json"
+async function updateTextBookJudgments() {
+    const data = fs.readFileSync(TEXTBOOK_DATA_PATH, 'utf-8');
+    const rows = JSON.parse(data);
+    console.log(rows)
+    for (const row of rows) {
+        for (const item of row) {
+            if (item.includes("/")){ // is caseAct
+                const result = await prisma.case.findUnique({
+                    where: {
+                        caseAct: item
+                    },
+                    include: {
+                        judgments: true
+                    }
+                });
+
+                if (result && result.judgments && result.judgments.length > 0) {
+                    await prisma.judgment.updateMany({
+                        where: {
+                            id: {
+                                in: result.judgments.map(r => r.id)
+                            }
+                        },
+                        data: {
+                            inTextbook: true
+                        }
+                    });
+                    console.log(`Updated ${result.judgments.length} judgments for case ${item}`);
+                    break
+                }
+            } else { // neutral citation or parallel citation
+                const neutralCitation = item;
+                const parallelCitation = item;
+
+                const result = await prisma.judgment.updateMany({
+                    where: {
+                        neutralCitation: neutralCitation
+                    },
+                    data: {
+                        inTextbook: true
+                    }
+                });
+
+                if (result && result.count > 0) {
+                    console.log(`Updated ${result.count} judgments for neutral citation ${neutralCitation}`);
+                    break;
+                }
+
+                const result2 = await prisma.judgment.updateMany({
+                    where: {
+                        parallelCitations: {
+                            some: {
+                                citation: parallelCitation
+                            }
+                        }
+                    },
+                    data: {
+                        inTextbook: true
+                    }
+                });
+
+                if (result2 && result2.count > 0) {
+                    console.log(`Updated ${result2.count} judgments for parallel citation ${parallelCitation}`);
+                    break;
+                }
+
+            }
+        }
+    }
+}
 // insertJudgmentMeta();
 // insertParallelCitations();
-insertCases();
+// insertCases();
+// findJudgmentWithoutCase();
+updateTextBookJudgments()

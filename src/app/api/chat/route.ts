@@ -219,7 +219,16 @@ export async function POST(req: Request) {
 					system: searchPrompt,
 					messages: modelMessages,
 					experimental_telemetry: { isEnabled: true },
-					onFinish() {
+					onFinish({usage}) {
+						writer.write({
+							type: "message-metadata",
+							messageMetadata: {
+								searchQuery: searchQueries.join("\n"),
+								searchQueries: searchQueries,
+								usage: usage,
+							},
+						});
+
 						// 5. Send completion notification (transient)
 						writer.write({
 							type: "data-data",
@@ -230,7 +239,7 @@ export async function POST(req: Request) {
 				});
 
 				writer.merge(result.toUIMessageStream());
-				
+
 			} finally {
 				DEFAULT_LANGSMITH_SPAN_PROCESSOR.shutdown();
 			}
