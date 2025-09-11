@@ -323,6 +323,198 @@ async function insertLegislation() {
 }
 
 
+/**
+ * Build update operations for cross-references using IDs (unique) instead of non-unique "path".
+ * Returns a discriminated union with a target model and the correct Prisma update shape.
+ */
+function referenceToUpdateList(
+    reference: any,
+    cap_no: string,
+    section_name: string,
+    sectionIdByPath: Map<string, number>
+): Array<
+    | { model: "cap"; where: { capNumber_languageCode: { capNumber: string; languageCode: string } }; data: { referencedByLegislationSections: { connect: { id: number } } } }
+    | { model: "section"; where: { id: number }; data: { referencedByLegislationSections: { connect: { id: number } } } }
+> {
+    const updates: any[] = [];
+
+    // Source section path (the section that contains the reference)
+    const sourcePath = `${cap_no}/${section_name}`;
+    const sourceId = sectionIdByPath.get(sourcePath);
+    if (!sourceId) {
+        // Source section not found in DB; skip producing any updates
+        return updates;
+    }
+
+    if (reference.type === "legislation") {
+        // Section S (sourceId) references a LegislationCap C
+        // We update the target cap to connect referencedByLegislationSections <- S
+        updates.push({
+            model: "cap",
+            where: {
+                capNumber_languageCode: {
+                    capNumber: reference.cap,
+                    languageCode: LANGUAGE_CODE,
+                },
+            },
+            data: {
+                referencedByLegislationSections: {
+                    connect: {
+                        id: sourceId,
+                    },
+                },
+            },
+        });
+        return updates;
+    }
+
+    if (["section", "subsection", "schedule"].includes(reference.type)) {
+        // Section S (sourceId) references another LegislationSection T (targetId)
+        const targetPath =
+            reference.type === "section"
+                ? `${reference.cap}/s${reference.section}`
+                : reference.type === "subsection"
+                ? `${reference.cap}/s${reference.section}/${reference.subsection}`
+                : `${reference.cap}/sch${reference.section}`;
+
+        const targetId = sectionIdByPath.get(targetPath);
+        if (!targetId) {
+            return updates;
+        }
+
+        updates.push({
+            model: "section",
+            where: { id: targetId },
+            data: {
+                referencedByLegislationSections: {
+                    connect: {
+                        id: sourceId,
+                    },
+                },
+            },
+        });
+        return updates;
+    }
+
+    return updates;
+}
+
+async function updateLegislationReferences() {
+    const files = fs.readdirSync(DATA_DIR_PATH)
+        .filter(file => file.endsWith('.json'));
+
+    // Build a path -> id map for all LegislationSections to allow unique connects
+    const allSections = await prisma.legislationSection.findMany({
+        select: { id: true, path: true },
+    });
+    const sectionIdByPath = new Map<string, number>(allSections.map(s => [s.path, s.id]));
+
+    for (const file of files) {
+        const filePath = path.join(DATA_DIR_PATH, file);
+        const data = require(filePath);
+        const capUpdates: any[] = [];
+        const sectionUpdates: any[] = [];
+
+        // process section references
+        if (data.sections && data.sections.length > 0) {
+            for (const section of data.sections) {
+
+                // process whole section references
+                if (section.references && section.references.length > 0) {
+                    for (const reference of section.references) {
+                        const updates = referenceToUpdateList(reference, data.cap_no, section.name, sectionIdByPath);
+                        for (const u of updates) {
+                            if (u.model === "cap") capUpdates.push(u);
+                            else if (u.model === "section") sectionUpdates.push(u);
+                        }
+                    }
+                }
+
+                // process subsection references
+                if (section.subsections && section.subsections.length > 0) {
+                    for (const subsection of section.subsections) {
+                        if (subsection.references && subsection.references.length > 0) {
+                            for (const reference of subsection.references) {
+                                const updates = referenceToUpdateList(reference, data.cap_no, `${section.name}/${subsection.name}`, sectionIdByPath);
+                                for (const u of updates) {
+                                    if (u.model === "cap") capUpdates.push(u);
+                                    else if (u.model === "section") sectionUpdates.push(u);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // process schedule references
+        if (data.schedules && data.schedules.length > 0) {
+            for (const schedule of data.schedules) {
+                const wholeScheduleReferences: any[] = [];
+
+                // process schedule section references
+                if (schedule.sections && schedule.sections.length > 0) {
+                    for (const section of schedule.sections) {
+                        if (section.references && section.references.length > 0) {
+                            wholeScheduleReferences.push(...section.references);
+                            for (const reference of section.references) {
+                                const updates = referenceToUpdateList(
+                                    reference,
+                                    data.cap_no,
+                                    `${schedule.name}/${section.name.split('_')[1].trim()}`,
+                                    sectionIdByPath
+                                );
+                                for (const u of updates) {
+                                    if (u.model === "cap") capUpdates.push(u);
+                                    else if (u.model === "section") sectionUpdates.push(u);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // process whole schedule references
+                if (wholeScheduleReferences.length > 0) {
+                    for (const reference of wholeScheduleReferences) {
+                        const updates = referenceToUpdateList(reference, data.cap_no, schedule.name, sectionIdByPath);
+                        for (const u of updates) {
+                            if (u.model === "cap") capUpdates.push(u);
+                            else if (u.model === "section") sectionUpdates.push(u);
+                        }
+                    }
+                }
+            }
+        }
+
+        // update db (execute per-target-model with correct input types)
+        try {
+            if (capUpdates.length > 0) {
+                await Promise.all(
+                    capUpdates.map((u) =>
+                        prisma.legislationCap.update({
+                            where: u.where,
+                            data: u.data,
+                        })
+                    )
+                );
+            }
+            if (sectionUpdates.length > 0) {
+                await Promise.all(
+                    sectionUpdates.map((u) =>
+                        prisma.legislationSection.update({
+                            where: u.where,
+                            data: u.data,
+                        })
+                    )
+                );
+            }
+        } catch (error) {
+            console.error(`Error updating legislation references for ${data.cap_no}:`, error);
+        }
+    }
+}
+
+
 async function deleteAllInterpretations() {
     try {
         const result = await prisma.interpretation.deleteMany({});
@@ -394,7 +586,7 @@ async function updateAppendixSections() {
     }
 }
 
-updateAppendixSections() 
+updateLegislationReferences() 
     .then((res) => {
         console.log(res);
     })

@@ -11,11 +11,14 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GroundingsDisplay } from "./groundings-display";
 import { MyUIMessage } from "@/lib/types";
+import { Slider } from "@/components/ui/slider"
+import { DefaultChatTransport } from 'ai';
 
 export function Chat() {
   const chatId = "001";
 
   const [input, setInput] = useState('');
+  const [searchDepth, setSearchDepth] = useState(2);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -74,13 +77,33 @@ export function Chat() {
 
       {isDevMode && (
         <div className="col-span-1 p-4 border-r border-border overflow-y-auto h-full min-w-2xs flex-1/2 max-w-[50rem]">
+
+          <div className="mb-4">
+            <h3 className="font-semibold mb-2">Settings</h3>
+            <div className="flex gap-2 items-center ml-2">
+              <span className="text-xs">Search Depth: </span>
+              <Slider
+                className="max-w-64"
+                value={[searchDepth]}
+                max={4}
+                min={1}
+                step={1}
+                onValueChange={(value) => {
+                  setSearchDepth(value[0])
+                }}
+              />
+              <span className="text-xs">{searchDepth}</span>
+            </div>
+          </div>
+
           {(messages[messages.length - 1]?.metadata?.searchQuery || messages[messages.length - 1]?.metadata?.searchQueries) && status !== "submitted" && (
             <div className="mb-4">
               <h3 className="font-semibold mb-2">Search Query</h3>
               <pre className="text-xs bg-muted p-2 rounded mt-1 overflow-x-auto">{messages[messages.length - 1]?.metadata?.searchQuery}</pre>
             </div>
           )}
-          {isDevMode && status !== "submitted" && (
+
+          {status !== "submitted" && (
             <div>
               <h3 className="font-semibold mb-2">Groundings</h3>
               <GroundingsDisplay groundings={messages[messages.length - 1]?.parts.filter((part) => part.type === "source-url")} />
@@ -129,7 +152,7 @@ export function Chat() {
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) => sendMessage({ text: message })}
+            sendMessage={(message) => sendMessage({ text: message }, { body: { searchDepth: searchDepth } })}
           />
         </form>
       </div>

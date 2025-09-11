@@ -54,7 +54,8 @@ const searchClicClient = new SearchClient(
 export type searchClicClientType = typeof searchClicClient
 
 export async function POST(req: Request) {
-	const { messages } = await req.json();
+	const { messages, searchDepth } = await req.json();
+	console.log("searchDepth: ", searchDepth);
 	const modelMessages = convertToModelMessages(messages);
 	// const userContent = modelMessages[modelMessages.length - 1].content;
 	const searchQueries = await rewriteQuery(modelMessages);
@@ -107,102 +108,142 @@ export async function POST(req: Request) {
 				})
 			);
 
+			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
-			const clicNidsToSearch = clicResults.map((r) => r.nid);
+			if (searchDepth > 1) {
+				const clicNidsToSearch = clicResults.map((r) => r.nid);
+				
+				if (clicNidsToSearch.length > 0) {
+					try {
+						const startTime = Date.now();
+						// Per-query timeout (10s) instead of global middleware
+						const queryPromise = prisma.clicPage.findMany({
+							where: {
+								nid: {
+									in: clicNidsToSearch,
+								},
+							},
+							include: {
+								referencingLegislationSections: {
+									select: {
+										capNumber: true,
+										sectionNumber: true,
+										subsectionNumber: true,
+										sectionHeading: true,
+										content: true,
+										url: true,
+										parentLegislationCap: {
+											select: {
+												title: true,
+											},
+										},
+										referencingLegislationSections: searchDepth > 2? {
+											select: {
+												capNumber: true,
+												sectionNumber: true,
+												subsectionNumber: true,
+												sectionHeading: true,
+												content: true,
+												url: true,
+												parentLegislationCap: {
+													select: {
+														title: true,
+													},
+												},
+												referencingLegislationSections: searchDepth > 3? {
+													select: {
+														capNumber: true,
+														sectionNumber: true,
+														subsectionNumber: true,
+														sectionHeading: true,
+														content: true,
+														url: true,
+														parentLegislationCap: {
+															select: {
+																title: true,
+															},
+														},
+													},
+												}: false
+											},
+										} : false,
+									},
+								}
+							}
+						});
+
+						const sqlSearchResults = await Promise.race([
+							queryPromise,
+							new Promise<never>((_, reject) =>
+								setTimeout(() => reject(new Error('Database query timeout')), 10000)
+							),
+						]);
+
+						// console.log("SQL Search Results: ", sqlSearchResults);
+					
+
+						const queryTime = Date.now() - startTime;
+						// console.log(`SQL Result`, sqlSearchResults);
+						writer.write({
+							type: "data-data",
+							data: { type: "notification", message: `SQL search completed in ${queryTime}ms.`, level: "info" },
+							transient: true,
+						});
+
+						legislationResults.push(...sqlSearchResults.flatMap((result) => {
+							return result.referencingLegislationSections.map((section) => ({
+								capNumber: section.capNumber,
+								sectionNumber: section.sectionNumber,
+								subsectionNumber: section.subsectionNumber || undefined,
+								capTitle: section.parentLegislationCap?.title || "",
+								sectionHeading: section.sectionHeading || "",
+								content: section.content,
+								url: section.url,
+							}));
+						}));
+
+						console.log("Legislation Results length: ", legislationResults.length);
+
+					} catch (error) {
+						console.error("Error fetching SQL search results:", error);
+						// Send error notification but continue with stream
+						writer.write({
+							type: "data-data",
+							data: { type: "notification", message: "Warning: Could not fetch related legislation", level: "warning" },
+							transient: true,
+						});
+					}
+				}
+
+
+				// Filter out duplicate legislation results
+				uniqueLegislationResults = legislationResults.filter((legislation, index, self) => {
+					const key = legislation.url;
+					return index === self.findIndex((l) =>
+						l.url === key
+					);
+				});
+				// console.log("Unique Legislation Results: ", uniqueLegislationResults);
 			
-			if (clicNidsToSearch.length > 0) {
-				try {
-					const startTime = Date.now();
-					// Per-query timeout (10s) instead of global middleware
-					const queryPromise = prisma.clicPage.findMany({
-						where: {
-							nid: {
-								in: clicNidsToSearch,
+
+				// 4. Send Legislation results
+				for (const legislation of uniqueLegislationResults) {
+					writer.write({
+						type: "source-url",
+						sourceId: `cap-${legislation.capNumber}-${legislation.sectionNumber}-${legislation.subsectionNumber || "none"}`,
+						url: legislation.url,
+						title: `Cap ${legislation.capNumber}, ${legislation.sectionNumber}: ${legislation.capTitle}`,
+						providerMetadata: {
+							custom: {
+								capTitle: legislation.capTitle,
+								sectionHeading: legislation.sectionHeading,
+								score: legislation.score || null,
+								rerankerScore: legislation.rerankerScore || null,
+								caption: legislation.sectionHeading
 							},
 						},
-						include: {
-							referencingLegislationSections: {
-								select: {
-									capNumber: true,
-									sectionNumber: true,
-									subsectionNumber: true,
-									sectionHeading: true,
-									content: true,
-									url: true,
-									parentLegislationCap: {
-										select: {
-											title: true,
-										},
-									}
-								},
-							}
-						}
-					});
-					const sqlSearchResults = await Promise.race([
-						queryPromise,
-						new Promise<never>((_, reject) =>
-							setTimeout(() => reject(new Error('Database query timeout')), 10000)
-						),
-					]);
-
-					const queryTime = Date.now() - startTime;
-					// console.log(`SQL Result`, sqlSearchResults);
-					writer.write({
-						type: "data-data",
-						data: { type: "notification", message: `SQL search completed in ${queryTime}ms.`, level: "info" },
-						transient: true,
-					});
-
-					legislationResults.push(...sqlSearchResults.flatMap((result) => {
-						return result.referencingLegislationSections.map((section) => ({
-							capNumber: section.capNumber,
-							sectionNumber: section.sectionNumber,
-							subsectionNumber: section.subsectionNumber || undefined,
-							capTitle: section.parentLegislationCap?.title || "",
-							sectionHeading: section.sectionHeading || "",
-							content: section.content,
-							url: section.url,
-						}));
-					}));
-
-				} catch (error) {
-					console.error("Error fetching SQL search results:", error);
-					// Send error notification but continue with stream
-					writer.write({
-						type: "data-data",
-						data: { type: "notification", message: "Warning: Could not fetch related legislation", level: "warning" },
-						transient: true,
 					});
 				}
-			}
-
-
-			// Filter out duplicate legislation results
-			const uniqueLegislationResults = legislationResults.filter((legislation, index, self) => {
-				const key = legislation.url;
-				return index === self.findIndex((l) =>
-					l.url === key
-				);
-			});
-			// console.log("Unique Legislation Results: ", uniqueLegislationResults);
-
-			// 4. Send Legislation results
-			for (const legislation of uniqueLegislationResults) {
-				writer.write({
-					type: "source-url",
-					sourceId: `cap-${legislation.capNumber}-${legislation.sectionNumber}-${legislation.subsectionNumber || "none"}`,
-					url: legislation.url,
-					title: `Cap ${legislation.capNumber}, ${legislation.sectionNumber}: ${legislation.capTitle}`,
-					providerMetadata: {
-						custom: {
-							capTitle: legislation.capTitle,
-							sectionHeading: legislation.sectionHeading,
-							score: legislation.score || null,
-							rerankerScore: legislation.rerankerScore || null,
-							caption: legislation.sectionHeading
-						},
-					},
-				});
 			}
 
 			// const systemPrompt = searchPrompt.replace("{{clicPages}}", convertClicResultsToXml(clicResults)).replace("{{legislationSections}}", convertLegislationResultsToXml(uniqueLegislationResults));
