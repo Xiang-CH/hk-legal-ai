@@ -179,7 +179,7 @@ export async function POST(req: Request) {
 							),
 						]);
 
-						// console.log("SQL Search Results: ", sqlSearchResults);
+						console.log("SQL Search Results: ", sqlSearchResults);
 					
 
 						const queryTime = Date.now() - startTime;

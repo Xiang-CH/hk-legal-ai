@@ -18,7 +18,7 @@ export function Chat() {
   const chatId = "001";
 
   const [input, setInput] = useState('');
-  const [searchDepth, setSearchDepth] = useState(2);
+  const [searchDepth, setSearchDepth] = useState(1);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());

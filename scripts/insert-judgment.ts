@@ -189,8 +189,46 @@ async function updateTextBookJudgments() {
         }
     }
 }
+
+const JUDGMENT_SUMMARY_RECORDS_PATH = "/Users/cxiang/Downloads/case-summary-records-0110.jsonl"
+
+async function insertJudgmentSummary() {
+    const data = fs.readFileSync(JUDGMENT_SUMMARY_RECORDS_PATH, 'utf-8');
+    const lines = data.trim().split('\n');
+    
+    let updatedCount = 0;
+    let notFoundCount = 0;
+    
+    for (const line of lines) {
+        if (!line.trim()) continue;
+        
+        const record = JSON.parse(line) as { citation: string; summary: string };
+        
+        const result = await prisma.judgment.updateMany({
+            where: {
+                neutralCitation: record.citation
+            },
+            data: {
+                summary: record.summary,
+                summarySource: "GENERATED"
+            }
+        });
+        
+        if (result.count > 0) {
+            updatedCount += result.count;
+            console.log(`Updated judgment for citation: ${record.citation}`);
+        } else {
+            notFoundCount++;
+            console.log(`Judgment not found for citation: ${record.citation}`);
+        }
+    }
+    
+    console.log(`\nSummary: Updated ${updatedCount} judgments, ${notFoundCount} not found.`);
+}
+
 // insertJudgmentMeta();
 // insertParallelCitations();
 // insertCases();
 // findJudgmentWithoutCase();
-updateTextBookJudgments()
+// updateTextBookJudgments()
+insertJudgmentSummary()

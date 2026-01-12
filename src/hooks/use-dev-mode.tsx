@@ -8,16 +8,16 @@ interface DevModeContextType {
 
 const DevModeContext = createContext<DevModeContextType | undefined>(undefined);
 
-export function DevModeProvider({ children }: { children: ReactNode }) {
-  const [isDevMode, setIsDevMode] = useState(false);
+function getInitialDevMode(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  const storedValue = localStorage.getItem("devMode");
+  return storedValue !== null ? JSON.parse(storedValue) : false;
+}
 
-  // Load state from localStorage on mount
-  useEffect(() => {
-    const storedValue = localStorage.getItem("devMode");
-    if (storedValue !== null) {
-      setIsDevMode(JSON.parse(storedValue));
-    }
-  }, []);
+export function DevModeProvider({ children }: { children: ReactNode }) {
+  const [isDevMode, setIsDevMode] = useState(getInitialDevMode);
 
   // Update localStorage when state changes
   useEffect(() => {

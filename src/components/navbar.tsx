@@ -30,7 +30,7 @@ export const Navbar = () => {
           </NavigationMenuItem>
         </NavigationMenuList>
         
-        <NavigationMenuList className="ml-4">
+        {/* <NavigationMenuList className="ml-4">
           <NavigationMenuItem>
               <NavigationMenuLink 
                 className={cn(
@@ -55,7 +55,7 @@ export const Navbar = () => {
                 
               </NavigationMenuLink>
           </NavigationMenuItem>
-        </NavigationMenuList>
+        </NavigationMenuList> */}
       </div>
 
       <div className="hidden md:flex items-center space-x-2">
