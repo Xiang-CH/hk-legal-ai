@@ -3,9 +3,9 @@ const { DEFAULT_LANGSMITH_SPAN_PROCESSOR } = initializeOTEL();
 
 import { PrismaClient } from "@/prisma/client";
 
-import { LegislationSection, MyUIMessage } from "@/lib/types";
+import { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { azure } from "@ai-sdk/azure";
-import { rewriteQuery, convertClicResultsToXml, convertLegislationResultsToXml } from "./helper";
+import { rewriteQuery, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { searchPrompt, sourcePrompt } from "@/lib/prompts";
 import {
 	createUIMessageStream,
@@ -17,7 +17,7 @@ import {
 	SearchClient,
 	AzureKeyCredential,
 } from "@azure/search-documents";
-import { searchClic } from "./helper";
+import { searchClic, searchJudgmentSummary } from "./helper";
 import { type ClicPage } from "@/lib/types";
 
 if (!process.env.AZURE_SEARCH_ENDPOINT) {
@@ -26,6 +26,10 @@ if (!process.env.AZURE_SEARCH_ENDPOINT) {
 
 if (!process.env.CLIC_INDEX_NAME) {
 	throw new Error("CLIC_INDEX_NAME is not defined");
+}
+
+if (!process.env.JUDGMENT_SUMMARY_INDEX_NAME) {
+	throw new Error("JUDGMENT_SUMMARY_INDEX_NAME is not defined");
 }
 
 if (!process.env.AZURE_SEARCH_KEY) {
@@ -51,15 +55,22 @@ const searchClicClient = new SearchClient(
 	new AzureKeyCredential(process.env.AZURE_SEARCH_KEY)
 );
 
+const searchJudgmentSummaryClient = new SearchClient(
+	process.env.AZURE_SEARCH_ENDPOINT,
+	process.env.JUDGMENT_SUMMARY_INDEX_NAME,
+	new AzureKeyCredential(process.env.AZURE_SEARCH_KEY)
+);
+
 export type searchClicClientType = typeof searchClicClient
+export type searchJudgmentSummaryClientType = typeof searchJudgmentSummaryClient
 
 export async function POST(req: Request) {
 	const { messages, searchDepth } = await req.json();
 	console.log("searchDepth: ", searchDepth);
 	const modelMessages = convertToModelMessages(messages);
 	// const userContent = modelMessages[modelMessages.length - 1].content;
-	const searchQueries = await rewriteQuery(modelMessages);
-	console.log("searchQueries: ", searchQueries);
+	const searchQueries = (await rewriteQuery(modelMessages)).splice(0, 3); // Limit to top 3 queries
+	// console.log("searchQueries: ", searchQueries);
 
 
 	const stream = createUIMessageStream<MyUIMessage>({
@@ -82,10 +93,11 @@ export async function POST(req: Request) {
 
 			const clicResults: ClicPage[] = [];
 			const legislationResults: LegislationSection[] = [];
+			const judgmentResults: JudgmentSummary[] = [];
 
-			// Semantic Search
-			await Promise.all(
-				searchQueries.map(async (searchQuery) => {
+			// Semantic Search (CLIC + Judgment Summary)
+			await Promise.all([
+				...searchQueries.map(async (searchQuery) => {
 					for await (const result of searchClic(searchQuery, searchClicClient)) {
 						if (clicResults.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no)) continue;
 						clicResults.push(result);
@@ -105,13 +117,37 @@ export async function POST(req: Request) {
 							},
 						});
 					}
-				})
-			);
+				}),
+				...searchQueries.map(async (searchQuery) => {
+					for await (const result of searchJudgmentSummary(searchQuery, searchJudgmentSummaryClient)) {
+						if (judgmentResults.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no)) continue;
+						judgmentResults.push(result);
+						writer.write({
+							type: "source-url",
+							sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
+							url: process.env.HKLII_BASEURL + result.url,
+							title: result.neutralCitation,
+							providerMetadata: {
+								custom: {
+									score: result.score || null,
+									rerankerScore: result.rerankerScore || null,
+									caption: result.caption,
+									captionHighlights: result.captionHighlights,
+									courtName: result.courtName,
+									year: result.year,
+									parties: result.parties,
+								},
+							},
+						});
+					}
+				}),
+			]);
 
 			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
 			if (searchDepth > 1) {
 				const clicNidsToSearch = clicResults.map((r) => r.nid);
+				console.log("Clic NIDs to search: ", clicNidsToSearch);
 				
 				if (clicNidsToSearch.length > 0) {
 					try {
@@ -248,9 +284,15 @@ export async function POST(req: Request) {
 
 			// const systemPrompt = searchPrompt.replace("{{clicPages}}", convertClicResultsToXml(clicResults)).replace("{{legislationSections}}", convertLegislationResultsToXml(uniqueLegislationResults));
 			// console.log("systemPrompt: ", systemPrompt);
+			// console.log("Judgment Results: ", judgmentResults);
+
+			// Final prompt to model
 			modelMessages.push({
 				role: "system",
-				content: sourcePrompt.replace("{{clicPages}}", convertClicResultsToXml(clicResults)).replace("{{legislationSections}}", convertLegislationResultsToXml(uniqueLegislationResults)),
+				content: sourcePrompt
+					.replace("{{clicPages}}", convertClicResultsToXml(clicResults))
+					.replace("{{legislationSections}}", convertLegislationResultsToXml(uniqueLegislationResults))
+					.replace("{{judgmentSummaries}}", convertJudgmentResultsToXml(judgmentResults)),
 			});
 			// console.log("modelMessages: ", modelMessages);
 

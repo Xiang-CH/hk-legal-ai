@@ -16,7 +16,7 @@ import { useDatabaseStatus } from "@/hooks/db-status";
 
 export const Navbar = () => {
   const pathname = usePathname();
-  const { isDevMode, toggleDevMode } = useDevMode();
+  const { isDevMode, toggleDevMode, isLoaded } = useDevMode();
   const { status: dbStatus, isConnected } = useDatabaseStatus(60000);
 
   return (
@@ -72,11 +72,13 @@ export const Navbar = () => {
           )}
         </div>
         <Label htmlFor="dev-mode" className="text-sm">Dev Mode</Label>
-        <Switch
-          id="dev-mode"
-          checked={isDevMode}
-          onCheckedChange={toggleDevMode}
-        />
+        {isLoaded && (
+          <Switch
+            id="dev-mode"
+            checked={isDevMode}
+            onCheckedChange={toggleDevMode}
+          />
+        )}
       </div>
     </NavigationMenu>
   );

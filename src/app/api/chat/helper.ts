@@ -2,8 +2,8 @@ import { azure } from "@ai-sdk/azure";
 import { queryExtendPrompt } from "@/lib/prompts";
 import { generateObject, ModelMessage } from "ai"
 import { z } from 'zod';
-import { searchClicClientType } from "./route";
-import { ClicPage, LegislationSection } from "@/lib/types";
+import { searchClicClientType, searchJudgmentSummaryClientType } from "./route";
+import { ClicPage, LegislationSection, JudgmentSummary } from "@/lib/types";
 
 export async function rewriteQuery(messages: ModelMessage[]) {
     const QueryExpandFormatSchema = z.object({
@@ -101,4 +101,69 @@ export function convertLegislationResultsToXml(legislationResults: LegislationSe
         <content>${r.content}</content>
     </section>`;
     }).join("\n") + "\n</legislationSections>";
+}
+
+
+export async function* searchJudgmentSummary(query: string, searchClient: searchJudgmentSummaryClientType) {
+    const searchResults = await searchClient.search(
+        query,
+        {
+            top: 8,
+            queryType: "full",
+            searchMode: "all",
+            select: ["judgmentId", "chunk_no", "neutralCitation", "courtName", "year", "date", "parties", "summary", "summarySource", "url"],
+            // semanticSearchOptions: {
+            //     configurationName: "judgment-summary-semantic-config",
+            //     captions: {
+            //         captionType: "extractive"
+            //     },
+            // },
+            vectorSearchOptions: {
+                queries: [
+                    {
+                        kind: "text",
+                        text: query,
+                        fields: ["embedding"],
+                    }
+                ],
+            },
+        }
+    );
+
+    for await (const result of searchResults.results) {
+        const document = result.document as {
+            judgmentId: number;
+            chunk_no: number;
+            neutralCitation: string;
+            courtName: string;
+            year: number;
+            date: string;
+            parties: string | null;
+            summary: string;
+            summarySource: string | null;
+            url: string;
+        };
+        yield {
+            ...document,
+            score: result.score,
+            rerankerScore: result.rerankerScore,
+            caption: result.captions?.[0]?.text || "",
+            captionHighlights: result.captions?.[0]?.highlights || ""
+        }
+    }
+}
+
+
+export function convertJudgmentResultsToXml(judgmentResults: JudgmentSummary[]) {
+    return "<judgmentSummaries>\n" + judgmentResults.map((r) => {
+        return `    <judgment>
+        <url>${r.url}</url>
+        <neutralCitation>${r.neutralCitation}</neutralCitation>
+        <courtName>${r.courtName}</courtName>
+        <year>${r.year}</year>
+        <date>${r.date}</date>
+        <parties>${r.parties || ""}</parties>
+        <summary>${r.summary}</summary>
+    </judgment>`;
+    }).join("\n") + "\n</judgmentSummaries>";
 }

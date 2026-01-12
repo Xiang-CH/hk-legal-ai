@@ -4,30 +4,35 @@ import { createContext, useContext, useState, useEffect, ReactNode } from "react
 interface DevModeContextType {
   isDevMode: boolean;
   toggleDevMode: () => void;
+  isLoaded: boolean;
 }
 
 const DevModeContext = createContext<DevModeContextType | undefined>(undefined);
 
-function getInitialDevMode(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  const storedValue = localStorage.getItem("devMode");
-  return storedValue !== null ? JSON.parse(storedValue) : false;
-}
-
 export function DevModeProvider({ children }: { children: ReactNode }) {
-  const [isDevMode, setIsDevMode] = useState(getInitialDevMode);
+  const [isDevMode, setIsDevMode] = useState(false);
+  const [isLoaded, setIsLoaded] = useState(false);
 
-  // Update localStorage when state changes
+  // Load from localStorage on mount
   useEffect(() => {
-    localStorage.setItem("devMode", JSON.stringify(isDevMode));
-  }, [isDevMode]);
+    const storedValue = localStorage.getItem("devMode");
+    if (storedValue !== null) {
+      setIsDevMode(JSON.parse(storedValue));
+    }
+    setIsLoaded(true);
+  }, []);
+
+  // Save to localStorage when changed
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem("devMode", JSON.stringify(isDevMode));
+    }
+  }, [isDevMode, isLoaded]);
 
   const toggleDevMode = () => setIsDevMode(prev => !prev);
 
   return (
-    <DevModeContext.Provider value={{ isDevMode, toggleDevMode }}>
+    <DevModeContext.Provider value={{ isDevMode, toggleDevMode, isLoaded }}>
       {children}
     </DevModeContext.Provider>
   );

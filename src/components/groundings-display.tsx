@@ -11,8 +11,8 @@ export const GroundingsDisplay = ({
     part.sourceId.startsWith("clic")
   );
   const caps = groundings.filter((part) => part.sourceId.startsWith("cap"));
-  const judgement = groundings.filter((part) =>
-    part.sourceId.startsWith("case")
+  const judgment = groundings.filter((part) =>
+    part.sourceId.startsWith("judgment")
   );
 
   return (
@@ -20,7 +20,7 @@ export const GroundingsDisplay = ({
       <TabsList>
         <TabsTrigger value="clic">Clic Pages</TabsTrigger>
         <TabsTrigger value="cap">Legislation</TabsTrigger>
-        <TabsTrigger value="case">Cases</TabsTrigger>
+        <TabsTrigger value="judgment">Judgment</TabsTrigger>
       </TabsList>
       <TabsContent value="clic">
         <SourceGroup sources={clicPages} />
@@ -28,8 +28,8 @@ export const GroundingsDisplay = ({
       <TabsContent value="cap">
         <SourceGroup sources={caps} />
       </TabsContent>
-      <TabsContent value="case">
-        <SourceGroup sources={judgement} />
+      <TabsContent value="judgment">
+        <SourceGroup sources={judgment} />
       </TabsContent>
     </Tabs>
 

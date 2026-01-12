@@ -12,13 +12,12 @@ import { cn } from "@/lib/utils";
 import { GroundingsDisplay } from "./groundings-display";
 import { MyUIMessage } from "@/lib/types";
 import { Slider } from "@/components/ui/slider"
-import { DefaultChatTransport } from 'ai';
 
 export function Chat() {
   const chatId = "001";
 
   const [input, setInput] = useState('');
-  const [searchDepth, setSearchDepth] = useState(1);
+  const [searchDepth, setSearchDepth] = useState(2);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -37,13 +36,15 @@ export function Chat() {
     setMessages,
     sendMessage,
     status,
-    stop,
+    stop
   } = useChat<MyUIMessage>({
     onError: (error) => {
       if (error.message.includes("Too many requests")) {
         toast.error(
           "You are sending too many messages. Please try again later.",
         );
+      } else {
+        toast.error(`Error: ${error.message}`);
       }
     },
     onFinish: (data) => {
@@ -62,7 +63,7 @@ export function Chat() {
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role === "user") {
       if (messagesContainerRef.current) {
-        messagesContainerRef.current.style.paddingBottom = "86%";
+        messagesContainerRef.current.style.paddingBottom = "82%";
       }
 
       const element = messageRefs.current.get(lastMessage.id);

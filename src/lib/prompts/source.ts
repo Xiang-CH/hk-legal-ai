@@ -5,7 +5,7 @@ const prompt = `## Sources
 ### Ordinances and Regulations
 {{legislationSections}}
 
-### Judgement and Cases
-{{judgement}}`
+### Judgment Summaries
+{{judgmentSummaries}}`
 
 export default prompt;

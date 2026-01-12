@@ -28,6 +28,24 @@ const legislationSchema = z.object({
 });
 export type LegislationSection = z.infer<typeof legislationSchema>;
 
+const judgmentSummarySchema = z.object({
+  judgmentId: z.number(),
+  chunk_no: z.number(),
+  neutralCitation: z.string(),
+  courtName: z.string(),
+  year: z.number(),
+  date: z.string(),
+  parties: z.string().nullable(),
+  summary: z.string(),
+  summarySource: z.string().nullable(),
+  url: z.string(),
+  rerankerScore: z.number().optional(),
+  score: z.number().optional(),
+  caption: z.string().optional(),
+  captionHighlights: z.string().optional(),
+});
+export type JudgmentSummary = z.infer<typeof judgmentSummarySchema>;
+
 const judgementSchema = z.object({
   case_name: z.string(),
   court: z.string(),
