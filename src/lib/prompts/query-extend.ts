@@ -5,9 +5,10 @@ Some Common Abbreviations:
 
 If there are abbreviations in the conversation history, make sure both the abbreviation and the full name are included in the search queries.
 
-The goal is to generate 3 database vector search queries (not questions to user) based on the conversation history. The search queries should be covering different possible aspects of the topic of consultation, the goal of the queries is to find as many relevant sources in the database as possible. The queries can extend beyond the conversation history to including what you think is relevant.
+The goal is to generate 3 short database search queries (not questions to user) based on the conversation history. Only short phrases should be used in the search queries, do not use full sentences or questions.
+The search queries should be covering different possible aspects of the topic of consultation, the goal of the queries is to find as many relevant sources in the database as possible. 
 
-Do not include 'Hong Kong' in the search query.
+Do not include 'Hong Kong' in any search queries.
 Output only the database query as a list of strings in JSON format, and nothing else.`;
 
 export default prompt;

@@ -1,10 +1,7 @@
-import { initializeOTEL } from 'langsmith/experimental/otel/setup';
-const { DEFAULT_LANGSMITH_SPAN_PROCESSOR } = initializeOTEL();
-
 import { PrismaClient } from "@/prisma/client";
 
 import { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
-import { azure } from "@ai-sdk/azure";
+import { azure } from "./helper";
 import { rewriteQuery, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { searchPrompt, sourcePrompt } from "@/lib/prompts";
 import {
@@ -19,6 +16,13 @@ import {
 } from "@azure/search-documents";
 import { searchClic, searchJudgmentSummary } from "./helper";
 import { type ClicPage } from "@/lib/types";
+import {
+	observe,
+	updateActiveObservation,
+	updateActiveTrace,
+	startActiveObservation,
+} from "@langfuse/tracing";
+import { langfuseSpanProcessor } from "@/instrumentation";
 
 if (!process.env.AZURE_SEARCH_ENDPOINT) {
 	throw new Error("AZURE_SEARCH_ENDPOINT is not defined");
@@ -64,14 +68,35 @@ const searchJudgmentSummaryClient = new SearchClient(
 export type searchClicClientType = typeof searchClicClient
 export type searchJudgmentSummaryClientType = typeof searchJudgmentSummaryClient
 
-export async function POST(req: Request) {
-	const { messages, searchDepth } = await req.json();
-	console.log("searchDepth: ", searchDepth);
-	const modelMessages = convertToModelMessages(messages);
-	// const userContent = modelMessages[modelMessages.length - 1].content;
-	const searchQueries = (await rewriteQuery(modelMessages)).splice(0, 3); // Limit to top 3 queries
-	// console.log("searchQueries: ", searchQueries);
+const handler = async (req: Request) => {
+	let { messages, searchDepth } = await req.json();
 
+	if (!searchDepth){
+		searchDepth = 2;
+	}
+	// console.log("searchDepth: ", searchDepth);
+
+	// Set session id and user id on active trace
+	const modelMessages = convertToModelMessages(messages);
+	const inputText = modelMessages[modelMessages.length - 1].content;
+
+	// Add input and trace metadata
+	updateActiveObservation({
+		input: inputText,
+	});
+
+	updateActiveTrace({
+		name: "chat-message",
+		input: inputText,
+	});
+
+	const searchQueries = await startActiveObservation("rewrite-query", async (span) => {
+		span.update({ input: inputText });
+		const queries = (await rewriteQuery(modelMessages)).splice(0, 3); // Limit to top 3 queries
+		span.update({ output: queries });
+		return queries;
+	});
+	// console.log("searchQueries: ", searchQueries);
 
 	const stream = createUIMessageStream<MyUIMessage>({
 		execute: async ({ writer }) => {
@@ -96,62 +121,88 @@ export async function POST(req: Request) {
 			const judgmentResults: JudgmentSummary[] = [];
 
 			// Semantic Search (CLIC + Judgment Summary)
-			await Promise.all([
-				...searchQueries.map(async (searchQuery) => {
-					for await (const result of searchClic(searchQuery, searchClicClient)) {
-						if (clicResults.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no)) continue;
-						clicResults.push(result);
-						// 3. Send message source
-						writer.write({
-							type: "source-url",
-							sourceId: `clic-${result.nid}-${result.chunk_no}`,
-							url: result.url,
-							title: result.title,
-							providerMetadata: {
-								custom: {
-									score: result.score || null,
-									rerankerScore: result.rerankerScore || null,
-									caption: result.caption,
-									captionHighlights: result.captionHighlights,
-								},
-							},
+			await startActiveObservation("semantic-search", async (span) => {
+				span.update({
+					input: { queries: searchQueries },
+				});
+
+				await Promise.all([
+					...searchQueries.map(async (searchQuery) => {
+						await startActiveObservation("search-clic", async (clicSpan) => {
+							clicSpan.update({ input: searchQuery });
+							for await (const result of searchClic(searchQuery, searchClicClient)) {
+								if (clicResults.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no)) continue;
+								clicResults.push(result);
+								// 3. Send message source
+								writer.write({
+									type: "source-url",
+									sourceId: `clic-${result.nid}-${result.chunk_no}`,
+									url: result.url,
+									title: result.title,
+									providerMetadata: {
+										custom: {
+											score: result.score || null,
+											rerankerScore: result.rerankerScore || null,
+											caption: result.caption,
+											captionHighlights: result.captionHighlights,
+										},
+									},
+								});
+							}
+							clicSpan.update({ output: { resultsCount: clicResults.length } });
 						});
-					}
-				}),
-				...searchQueries.map(async (searchQuery) => {
-					for await (const result of searchJudgmentSummary(searchQuery, searchJudgmentSummaryClient)) {
-						if (judgmentResults.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no)) continue;
-						judgmentResults.push(result);
-						writer.write({
-							type: "source-url",
-							sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
-							url: process.env.HKLII_BASEURL + result.url,
-							title: result.neutralCitation,
-							providerMetadata: {
-								custom: {
-									score: result.score || null,
-									rerankerScore: result.rerankerScore || null,
-									caption: result.caption,
-									captionHighlights: result.captionHighlights,
-									courtName: result.courtName,
-									year: result.year,
-									parties: result.parties,
-								},
-							},
+					}),
+					...searchQueries.map(async (searchQuery) => {
+						await startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
+							judgmentSpan.update({ input: searchQuery });
+							for await (const result of searchJudgmentSummary(searchQuery, searchJudgmentSummaryClient)) {
+								if (judgmentResults.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no)) continue;
+								judgmentResults.push(result);
+								writer.write({
+									type: "source-url",
+									sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
+									url: process.env.HKLII_BASEURL + result.url,
+									title: result.neutralCitation,
+									providerMetadata: {
+										custom: {
+											score: result.score || null,
+											rerankerScore: result.rerankerScore || null,
+											caption: result.caption,
+											captionHighlights: result.captionHighlights,
+											courtName: result.courtName,
+											year: result.year,
+											parties: result.parties,
+										},
+									},
+								});
+							}
+							judgmentSpan.update({ output: { resultsCount: judgmentResults.length } });
 						});
-					}
-				}),
-			]);
+					}),
+				]);
+
+				span.update({
+					output: {
+						clicResultsCount: clicResults.length,
+						judgmentResultsCount: judgmentResults.length,
+					},
+				});
+			});
 
 			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
 			if (searchDepth > 1) {
 				const clicNidsToSearch = clicResults.map((r) => r.nid);
-				console.log("Clic NIDs to search: ", clicNidsToSearch);
+				// console.log("Clic NIDs to search: ", clicNidsToSearch);
 				
 				if (clicNidsToSearch.length > 0) {
-					try {
-						const startTime = Date.now();
+					await startActiveObservation("search-legislation-sql", async (sqlSpan) => {
+						sqlSpan.update({
+							input: { clicNids: clicNidsToSearch, searchDepth },
+						});
+
+						try {
+							const startTime = Date.now();
 						// Per-query timeout (10s) instead of global middleware
 						const queryPromise = prisma.clicPage.findMany({
 							where: {
@@ -215,7 +266,7 @@ export async function POST(req: Request) {
 							),
 						]);
 
-						console.log("SQL Search Results: ", sqlSearchResults);
+						// console.log("SQL Search Results: ", sqlSearchResults);
 					
 
 						const queryTime = Date.now() - startTime;
@@ -238,17 +289,29 @@ export async function POST(req: Request) {
 							}));
 						}));
 
-						console.log("Legislation Results length: ", legislationResults.length);
+						// console.log("Legislation Results length: ", legislationResults.length);
 
-					} catch (error) {
-						console.error("Error fetching SQL search results:", error);
-						// Send error notification but continue with stream
-						writer.write({
-							type: "data-data",
-							data: { type: "notification", message: "Warning: Could not fetch related legislation", level: "warning" },
-							transient: true,
+						sqlSpan.update({
+							output: {
+								resultsCount: legislationResults.length,
+								queryTimeMs: queryTime,
+							},
 						});
-					}
+
+						} catch (error) {
+							console.error("Error fetching SQL search results:", error);
+							sqlSpan.update({
+								output: error,
+								level: "ERROR",
+							});
+							// Send error notification but continue with stream
+							writer.write({
+								type: "data-data",
+								data: { type: "notification", message: "Warning: Could not fetch related legislation", level: "warning" },
+								transient: true,
+							});
+						}
+					});
 				}
 
 
@@ -298,11 +361,29 @@ export async function POST(req: Request) {
 
 			try {
 				const result = streamText({
-					model: azure("gpt-4.1-mini"),
+					model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
 					system: searchPrompt,
 					messages: modelMessages,
 					experimental_telemetry: { isEnabled: true },
-					onFinish({usage}) {
+					providerOptions: {
+						openai: {
+							reasoningEffort: 'medium',
+							reasoningSummary: 'auto',
+						},
+					},
+					onFinish({usage, text, reasoning}) {
+						// Update trace with final output after stream completes
+						updateActiveObservation({
+							output: text,
+						});
+
+						updateActiveTrace({
+							output: text,
+						});
+
+						console.log("Usage: ", usage);
+						console.log("Reasoning Text: ", reasoning);
+
 						writer.write({
 							type: "message-metadata",
 							messageMetadata: {
@@ -319,15 +400,36 @@ export async function POST(req: Request) {
 							transient: true, // Won't be added to message history
 						});
 					},
+					onError: async (error) => {
+						updateActiveObservation({
+							output: error,
+							level: "ERROR"
+						});
+
+						updateActiveTrace({
+							output: error,
+						});
+					},
 				});
 
-				writer.merge(result.toUIMessageStream());
+				writer.merge(result.toUIMessageStream({
+					sendReasoning: true,
+				}));
 
 			} finally {
-				DEFAULT_LANGSMITH_SPAN_PROCESSOR.shutdown();
+				// Critical for serverless: flush traces before function terminates
+				await langfuseSpanProcessor.forceFlush();
 			}
 		},
 	});
 
 	return createUIMessageStreamResponse({ stream });
-}
+};
+
+// Wrap handler with observe() to create a Langfuse trace
+export const POST = observe(handler, {
+	name: "handle-chat-message",
+	captureInput: true,
+    captureOutput: true,
+	endOnExit: false, // Don't end observation until stream finishes
+});

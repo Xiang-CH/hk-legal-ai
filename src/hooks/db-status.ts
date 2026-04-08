@@ -26,7 +26,7 @@ const IDLE_TIMEOUT_MS = 3 * 60 * 1000; // 180000
 
 // Hook for continuous database monitoring with idle pause/resume
 export const useDatabaseStatus = (
-  intervalMs: number = 40000 // Poll every 40 seconds
+  intervalMs: number = 10000 // Poll every 10 seconds
 ) => {
   const [status, setStatus] = useState<string | undefined>();
   const [isConnected, setIsConnected] = useState<boolean>(false);

@@ -74,6 +74,7 @@ const metadataSchema = z.object({
     inputTokens: z.number().optional(),
     outputTokens: z.number().optional(),
     totalTokens: z.number().optional(),
+    reasoningTokens: z.number().optional(),
     cachedInputTokens: z.number().optional(),
   }).optional(),
 });

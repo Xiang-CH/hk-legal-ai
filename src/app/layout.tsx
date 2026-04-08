@@ -23,7 +23,7 @@ export default function RootLayout({
   prisma.$connect();
   
   return (
-    <html lang="en" className="auto light" style={{colorScheme:"light"}}>
+    <html lang="en" suppressHydrationWarning>
       <head></head>
       <body className={cn(GeistSans.className, "antialiased max-h-screen overflow-hidden")}>
         <Toaster position="top-center" richColors />

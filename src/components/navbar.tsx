@@ -10,14 +10,13 @@ import {
   NavigationMenuLink,
   NavigationMenuList,
 } from "./ui/navigation-menu"
-import { cn } from "@/lib/utils";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import { useDatabaseStatus } from "@/hooks/db-status";
 
 export const Navbar = () => {
   const pathname = usePathname();
   const { isDevMode, toggleDevMode, isLoaded } = useDevMode();
-  const { status: dbStatus, isConnected } = useDatabaseStatus(60000);
+  const { status: dbStatus, isConnected } = useDatabaseStatus(20000);
 
   return (
     <NavigationMenu className="max-w-full w-full justify-between px-4 border-b gap-4 box-border">

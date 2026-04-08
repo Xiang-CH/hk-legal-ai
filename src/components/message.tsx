@@ -22,7 +22,15 @@ const PreviewMessage = React.forwardRef<
 >(({ message }, ref) => {
   const { isDevMode } = useDevMode();
   if (message.parts.length === 0) return null;
-  if (message.parts.filter((part) => part.type === "text").join("").length === 0) return null;
+
+  const textParts = message.parts.filter((part) => part.type === "text");
+  const reasoningParts = message.parts.filter((part) => part.type === "reasoning");
+  const fileParts = message.parts.filter((part) => part.type === "file");
+  const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
+  const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
+
+  if (message.role === "user" && !hasTextContent) return null;
+  if (message.role === "assistant" && !hasTextContent && !hasReasoningContent && fileParts.length === 0) return null;
 
   // URL regex pattern
   // const urlRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
@@ -52,7 +60,7 @@ const PreviewMessage = React.forwardRef<
           "group-data-[role=user]/message:bg-primary group-data-[role=user]/message:text-primary-foreground flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl"
         )}
       >
-        {message.role === "assistant" && textContent && (
+        {message.role === "assistant" && (textContent || hasReasoningContent) && (
           <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
             <SparklesIcon size={14} />
           </div>
@@ -67,6 +75,22 @@ const PreviewMessage = React.forwardRef<
 
           {message.role === "assistant" &&
             message.parts?.map((part, index) => {
+              if (part.type === "reasoning" && part.text.trim().length > 0) {
+                const isStreaming = part.state === "streaming";
+
+                return (
+                  <div
+                    key={`${part.type}-${index}`}
+                    className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+                  >
+                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+                      {isStreaming ? "Thinking" : "Reasoning summary"}
+                    </div>
+                    <Markdown>{part.text}</Markdown>
+                  </div>
+                );
+              }
+
               if (part.type === "text") {
                 return (
                   <Markdown key={index}>{part.text}</Markdown>
@@ -96,6 +120,11 @@ const PreviewMessage = React.forwardRef<
                 message.metadata.usage.cachedInputTokens && message.metadata.usage.cachedInputTokens > 0 && (
                   <span>Cached Input Tokens: {message.metadata.usage.cachedInputTokens} (${(message.metadata.usage.cachedInputTokens * cachedInputCostPerToken).toFixed(8)})</span>
               )}
+              {
+                message.metadata.usage.reasoningTokens && message.metadata.usage.reasoningTokens > 0 && (
+                  <span>Reasoning Tokens: {message.metadata.usage.reasoningTokens} (${(message.metadata.usage.reasoningTokens * outputCostPerToken).toFixed(8)})</span>
+                )
+              }
               <span>Total Tokens: {message.metadata.usage.totalTokens}</span>
               <span>Total Cost: ${(((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken) + ((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken) + ((message.metadata.usage.cachedInputTokens ?? 0) * cachedInputCostPerToken)).toFixed(8)}</span>
             </div>

@@ -1,9 +1,17 @@
-import { azure } from "@ai-sdk/azure";
+import { createAzure } from "@ai-sdk/azure";
+import { createOpenAI } from "@ai-sdk/openai";
 import { queryExtendPrompt } from "@/lib/prompts";
-import { generateObject, ModelMessage } from "ai"
+import { generateObject, ModelMessage, embed } from "ai"
 import { z } from 'zod';
 import { searchClicClientType, searchJudgmentSummaryClientType } from "./route";
 import { ClicPage, LegislationSection, JudgmentSummary } from "@/lib/types";
+
+
+export const azure = createOpenAI({
+	apiKey: process.env.AZURE_OPENAI_KEY,
+	baseURL: process.env.AZURE_OPENAI_ENDPOINT,
+});
+
 
 export async function rewriteQuery(messages: ModelMessage[]) {
     const QueryExpandFormatSchema = z.object({
@@ -22,12 +30,28 @@ export async function rewriteQuery(messages: ModelMessage[]) {
     }).join("\n");
 
     const result = await generateObject({
-        model: azure("gpt-4.1-mini"),
+        model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
         system: queryExtendPrompt,
         prompt: `The conversation history is as follows:\n${conversation}`,
         schema: QueryExpandFormatSchema,
+        providerOptions: {
+            openai: {
+                reasoningEffort: 'low',
+            },
+        },
+        experimental_telemetry: {
+            isEnabled: true,
+        }
     })
     return result.object.queries;
+}
+
+export async function getEmbeddings(text: string) {
+    const embeddings = await embed({
+        model: azure.textEmbedding(process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || "text-embedding-3-large"),
+        value: text,
+    })
+    return embeddings.embedding;
 }
 
 
@@ -48,9 +72,14 @@ export async function* searchClic(query: string, searchClicClient: searchClicCli
             
             vectorSearchOptions: {
                 queries: [
+                    // {
+                    //     kind: "text",
+                    //     text: query,
+                    //     fields: ["embedding"],
+                    // }
                     {
-                        kind: "text",
-                        text: query,
+                        kind: "vector",
+                        vector: await getEmbeddings(query),
                         fields: ["embedding"],
                     }
                 ],
@@ -120,9 +149,14 @@ export async function* searchJudgmentSummary(query: string, searchClient: search
             // },
             vectorSearchOptions: {
                 queries: [
+                    // {
+                    //     kind: "text",
+                    //     text: query,
+                    //     fields: ["embedding"],
+                    // }
                     {
-                        kind: "text",
-                        text: query,
+                        kind: "vector",
+                        vector: await getEmbeddings(query),
                         fields: ["embedding"],
                     }
                 ],

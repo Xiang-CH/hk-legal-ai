@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useSyncExternalStore, useCallback, ReactNode } from "react";
 
 interface DevModeContextType {
   isDevMode: boolean;
@@ -9,27 +9,40 @@ interface DevModeContextType {
 
 const DevModeContext = createContext<DevModeContextType | undefined>(undefined);
 
+const STORAGE_KEY = "devMode";
+const listeners = new Set<() => void>();
+
+function notifyListeners() {
+  listeners.forEach(l => l());
+}
+
+function subscribe(callback: () => void) {
+  listeners.add(callback);
+  window.addEventListener("storage", callback);
+  return () => {
+    listeners.delete(callback);
+    window.removeEventListener("storage", callback);
+  };
+}
+
+function getSnapshot(): boolean {
+  const stored = localStorage.getItem(STORAGE_KEY);
+  return stored !== null ? (JSON.parse(stored) as boolean) : false;
+}
+
+function getServerSnapshot(): boolean {
+  return false;
+}
+
 export function DevModeProvider({ children }: { children: ReactNode }) {
-  const [isDevMode, setIsDevMode] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
+  const isDevMode = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  // getServerSnapshot returns false (hide on SSR), getSnapshot returns true (show on client)
+  const isLoaded = useSyncExternalStore(subscribe, () => true, () => false);
 
-  // Load from localStorage on mount
-  useEffect(() => {
-    const storedValue = localStorage.getItem("devMode");
-    if (storedValue !== null) {
-      setIsDevMode(JSON.parse(storedValue));
-    }
-    setIsLoaded(true);
-  }, []);
-
-  // Save to localStorage when changed
-  useEffect(() => {
-    if (isLoaded) {
-      localStorage.setItem("devMode", JSON.stringify(isDevMode));
-    }
-  }, [isDevMode, isLoaded]);
-
-  const toggleDevMode = () => setIsDevMode(prev => !prev);
+  const toggleDevMode = useCallback(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(!isDevMode));
+    notifyListeners();
+  }, [isDevMode]);
 
   return (
     <DevModeContext.Provider value={{ isDevMode, toggleDevMode, isLoaded }}>

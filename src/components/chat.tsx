@@ -38,6 +38,7 @@ export function Chat() {
     status,
     stop
   } = useChat<MyUIMessage>({
+    experimental_throttle: 50,
     onError: (error) => {
       if (error.message.includes("Too many requests")) {
         toast.error(
@@ -54,6 +55,16 @@ export function Chat() {
 
   const [messagesContainerRef, scrollToElement] =
     useScroll<HTMLDivElement>();
+
+  const lastMessage = messages[messages.length - 1];
+  const lastAssistantMessage = lastMessage?.role === "assistant" ? lastMessage : undefined;
+  const lastAssistantHasVisibleContent = lastAssistantMessage?.parts.some((part) => {
+    if (part.type === "text" || part.type === "reasoning") {
+      return part.text.trim().length > 0;
+    }
+
+    return false;
+  }) ?? false;
 
   useEffect(() => {
     if (messages.length === 0) return;
@@ -136,9 +147,11 @@ export function Chat() {
             />
           ))}
 
-          {status === "submitted" || (status === "streaming" &&
-            messages.length > 0 && messages[messages.length - 1].role === "assistant" &&
-            (messages[messages.length - 1].parts.filter((part) => part.type === "text").join("").length < 1)) && <ThinkingMessage query={messages[messages.length - 1]?.metadata?.searchQuery} />}
+          {(status === "submitted" || (status === "streaming" &&
+            lastAssistantMessage &&
+            !lastAssistantHasVisibleContent)) && (
+            <ThinkingMessage query={lastMessage?.metadata?.searchQuery} />
+          )}
 
 
         </div>
