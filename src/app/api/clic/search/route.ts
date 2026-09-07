@@ -1,9 +1,9 @@
 import { SearchClient, AzureKeyCredential } from "@azure/search-documents";
-import { PrismaClient } from "@/prisma/client";
+import { prisma } from "@/lib/prisma";
 
 const FILTERSTR = "search.in(topic, '{}' , '|')"
 
-const prisma = new PrismaClient();
+/* prisma imported from @/lib/prisma (pg adapter) */
 
 const searchClient = new SearchClient(
     process.env.AZURE_SEARCH_ENDPOINT || "",

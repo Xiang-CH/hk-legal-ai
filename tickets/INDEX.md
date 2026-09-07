@@ -4,8 +4,8 @@ Order: T01 → T02 → T03 → T04 → T05 → T06 → T07 → T08 → T09 → T
 
 | Done | Ticket | Title | Blocks |
 |---|---|---|---|
-| [ ] | T01 | Provision Flexible Server + extensions (azure_ai, no zhparser) | T02–T08 |
-| [ ] | T02 | Prisma SQL Server → Postgres port | T03, T04 |
+| [x] | T01 | Provision Flexible Server + extensions (azure_ai, no zhparser) | T02–T08 |
+| [x] | T02 | Prisma SQL Server → Postgres port | T03, T04 |
 | [ ] | T03 | Chunk DDL + baseline migration | T07 |
 | [ ] | T04 | Relational backfill (insert scripts → pg) | T05 |
 | [ ] | T05 | Re-chunk pipeline (index lost) | T06 |

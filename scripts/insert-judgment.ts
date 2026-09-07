@@ -1,6 +1,8 @@
 import { PrismaClient, Prisma, type Judgment, type ParallelCitations, type Case } from "../src/prisma/client/index.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 import fs from 'fs';
-const prisma = new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter });
 
 const META_DATA_PATH = "/Users/cxiang/Projects/hk-legislation-parsing/judgement/data/judgments.json"; 
 const CITATION_DATA_PATH = "/Users/cxiang/Projects/hk-legislation-parsing/judgement/data/parallel_citations.json"; 

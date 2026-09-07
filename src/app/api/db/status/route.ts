@@ -1,6 +1,6 @@
 import { SqlManagementClient } from "@azure/arm-sql";
 import { DefaultAzureCredential } from "@azure/identity";
-import { PrismaClient } from "@/prisma/client";
+import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 
 const subscriptionId = process.env.AZURE_SQL_DB_SUBSCRIPTION_ID;
@@ -13,8 +13,7 @@ if (!subscriptionId || !resourceGroupName || !serverName || !databaseName) {
   throw new Error("Missing Azure SQL Database configuration");
 }
 
-// Initialize Prisma Client
-const prisma = new PrismaClient();
+/* prisma imported from @/lib/prisma (pg adapter) */
 const credentials = new DefaultAzureCredential();
 const client = new SqlManagementClient(credentials, subscriptionId);
 

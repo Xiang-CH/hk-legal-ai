@@ -1,8 +1,10 @@
 import { PrismaClient } from "../src/prisma/client/index.js";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { AzureKeyCredential, SearchClient } from "@azure/search-documents";
 import { TokenTextSplitter } from "@langchain/textsplitters";
 import OpenAI from "openai";
-const prisma = new PrismaClient();
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter });
 
 const LANGUAGE_CODE = "en";
 const MAX_CHUNK_SIZE = 512;

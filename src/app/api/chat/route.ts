@@ -1,4 +1,4 @@
-import { PrismaClient } from "@/prisma/client";
+import { prisma } from "@/lib/prisma";
 
 import { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { azure } from "./helper";
@@ -40,13 +40,7 @@ if (!process.env.AZURE_SEARCH_KEY) {
 	throw new Error("AZURE_SEARCH_KEY is not defined");
 }
 
-const prisma = new PrismaClient({
-	datasources: {
-		db: {
-			url: process.env.DATABASE_URL,
-		},
-	},
-});
+/* prisma imported from @/lib/prisma (pg adapter) */
 
 /**
  * Note: Prisma middlewares ($use) are not available in the current client types.

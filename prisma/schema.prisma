@@ -12,7 +12,7 @@ generator dbml {
 }
 
 datasource db {
-  provider = "sqlserver"
+  provider = "postgresql"
   url = env("DATABASE_URL")
 }
 
@@ -20,12 +20,12 @@ model ClicPage {
   id Int @id @default(autoincrement())
   nid Int // page_nid
   title String
-  content String @db.NVarChar(max)
+  content String @db.Text
   topic String
   languageCode String // "en", "sc", "tc"
   url String
   path String
-  contextualInformation String @db.NVarChar(max)
+  contextualInformation String @db.Text
   lastUpdatedAt DateTime @updatedAt
 
   referencingPages ClicPage[] @relation("ClicPageRelationToClicPage")
@@ -47,7 +47,7 @@ model LegislationSection {
   sectionHeading String?
   sectionNumber String
   subsectionNumber String?
-  content String @db.NVarChar(max)
+  content String @db.Text
   languageCode String // "en", "sc", "tc"
   url String
   eLegislationUrl String?
@@ -67,7 +67,7 @@ model LegislationCap {
   id Int @id @default(autoincrement())
   capNumber String
   title String?
-  longTitle String? @db.NVarChar(max)
+  longTitle String? @db.Text
   languageCode String // "en", "sc", "tc"
   url String
   eLegislationUrl String?
@@ -87,7 +87,7 @@ model LegislationCap {
 model Interpretation {
   id Int @id @default(autoincrement())
   term String
-  termDefinition String @db.NVarChar(max)
+  termDefinition String @db.Text
   languageCode String // "en", "sc", "tc"
   
   parentLegislationCap LegislationCap @relation(fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
@@ -106,12 +106,12 @@ model Judgment {
   date DateTime
   languageCode String // "en", "sc", "tc"
   isTranslation Boolean
-  coram String ? @db.NVarChar(max)
-  parties String? @db.NVarChar(max)
-  representations String? @db.NVarChar(max)
-  charges String? @db.NVarChar(max)
-  remarks String? @db.NVarChar(max)
-  summary String? @db.NVarChar(max)
+  coram String ? @db.Text
+  parties String? @db.Text
+  representations String? @db.Text
+  charges String? @db.Text
+  remarks String? @db.Text
+  summary String? @db.Text
   summarySource String? // e.g. "GENERATED", "DOJ", "TEXTBOOK"
   legalrefUrl String
   url String

@@ -34,7 +34,7 @@
   3. Pin + record version (Preview API drifts): `SELECT azure_ai.version();` — if behind, `ALTER EXTENSION azure_ai UPDATE;` then re-record. Discover exact signatures on THIS server (do not trust docs alone): `SELECT proname, pg_get_function_arguments(oid) FROM pg_proc WHERE pronamespace IN ('azure_ai'::regnamespace,'azure_openai'::regnamespace,'azure_ml'::regnamespace);`
   4. Wire model access (DB-side settings, not app env):
      - OpenAI (embeddings in T06/T08): `SELECT azure_ai.set_setting('azure_openai.endpoint','https://<FOUNDRY-RESOURCE>.openai.azure.com');` + `SELECT azure_ai.set_setting('azure_openai.subscription_key','<KEY>');` — prefer managed identity over keys where possible.
-     - Rerank (T09): deploy Cohere rerank on Foundry serverless first, then `SELECT azure_ai.set_setting('azure_ml.serverless_ranking_endpoint','https://<DEPLOY>.<REGION>.models.ai.azure.com/<v1|v2>/rerank');` + `SELECT azure_ai.set_setting('azure_ml.serverless_ranking_key','<KEY>');` (or managed-identity auth).
+     - Rerank (T09): deploy Cohere rerank on Foundry serverless first, then `SELECT azure_ai.set_setting('azure_ml.scoring_endpoint','https://<DEPLOY>.<REGION>.models.ai.azure.com/<v1|v2>/rerank');` + `SELECT azure_ai.set_setting('azure_ml.serverless_ranking_key','<KEY>');` (or managed-identity auth).
      - Least-privilege: `GRANT azure_ai_settings_manager TO <loader_role>;` (settings only settable by `azure_pg_admin` or `azure_ai_settings_manager`).
   5. Tune: `maintenance_work_mem` 512MB–1GB for build (4GB box — do NOT use 1–2GB), `hnsw.ef_search=40` for queries. Revert `maintenance_work_mem` after T07.
   6. Firewall/VNet for app + admin; issue new pg `DATABASE_URL` (KeyVault/env, not repo).
@@ -50,3 +50,4 @@ unaccent	1.1	1.1	text search dictionary that removes accents
 vector	0.8.2	0.8.2	vector data type and ivfflat and hnsw access methods
 azure_ai	2.0.0	2.0.0	Azure AI and ML Services integration for PostgreSQL
 pg_trgm	1.6	1.6	text similarity measurement and index searching based on trigrams
+- **Follow-up 2026-09-07 (blocks T03):** extensions were verified on the server but NOT installed in `clic_chat` (`pg_extension` shows only `plpgsql`). As server admin connected to `clic_chat`, run: `CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS azure_ai;` (`pg_trgm`/`unaccent` already installed via app role).
