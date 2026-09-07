@@ -4,7 +4,21 @@
 - **Scope/files:** Azure portal/CLI + SQL only. No repo code. Record outputs in this ticket.
 - **Status:** Server created — PG18, 4GB RAM (tight for 100K × 3072-d HNSW build; consider temp scale-up for T07).
 - **Steps:**
-  0. Create a dedicated database (do NOT use the default `postgres` DB): `CREATE DATABASE clic_chat OWNER <app_role>;` then connect to `clic_chat` for everything below. Why: extensions are per-database (must live in the app DB, not `postgres`), and `azure_ai` settings are database-scoped — settings/extensions configured in `postgres` won't apply to your app.
+  0. Create a dedicated database (do NOT use the default `postgres` DB) + least-privilege app role — run as server admin on `postgres`:
+     ```sql
+     CREATE ROLE clic_app WITH LOGIN PASSWORD '<from-KeyVault>';
+     CREATE DATABASE clic_chat OWNER clic_app;
+     ```
+     Then reconnect to `clic_chat` and, still as admin, install extensions (step 2) and hand runtime rights to the app role:
+     ```sql
+     GRANT CONNECT, TEMPORARY ON DATABASE clic_chat TO clic_app;
+     GRANT USAGE ON SCHEMA public TO clic_app;
+     -- after T03 migrations create tables, grant DML (or set per-table):
+     -- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO clic_app;
+     -- ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO clic_app;
+     GRANT azure_ai_settings_manager TO clic_app;  -- only if the app itself must change azure_ai settings at runtime; otherwise keep on admin/loader role
+     ```
+     `DATABASE_URL` uses `clic_app` (never the admin login). Keep the admin login for migrations/extension/settings work only. Why: extensions are per-database (must live in the app DB, not `postgres`), and `azure_ai` settings are database-scoped — settings/extensions configured in `postgres` won't apply to your app.
   1. Allowlist check (run connected to `clic_chat`): `SHOW azure.extensions;` + `SELECT * FROM pg_available_extensions WHERE name IN ('vector','pg_trgm','unaccent','azure_ai');` — paste output here. (`azure_ai` is allowlisted on Flexible; schemas `azure_ai, azure_openai, azure_cognitive, azure_ml` come with it.)
   2. `CREATE EXTENSION IF NOT EXISTS vector; CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent; CREATE EXTENSION IF NOT EXISTS azure_ai;`
   3. Pin + record version (Preview API drifts): `SELECT azure_ai.version();` — if behind, `ALTER EXTENSION azure_ai UPDATE;` then re-record. Discover exact signatures on THIS server (do not trust docs alone): `SELECT proname, pg_get_function_arguments(oid) FROM pg_proc WHERE pronamespace IN ('azure_ai'::regnamespace,'azure_openai'::regnamespace,'azure_ml'::regnamespace);`
