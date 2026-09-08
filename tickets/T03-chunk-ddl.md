@@ -12,3 +12,16 @@
 - **Acceptance:** `\d clic_chunks`, `\d judgment_chunks` show PKs/FKs + `cjk_tokens`; baseline applies cleanly on fresh DB.
 - **Depends on:** T01, T02. **Blocks:** T07.
 - **Size:** S/M.
+
+- **Status 2026-09-08: files DONE, deploy BLOCKED on admin grants.**
+- `migrate deploy` fails: `permission denied for schema public` (PG15+ hardened `public`; `clic_app` owns the DB but has no CREATE on the schema) + `vector`/`azure_ai` still not installed.
+- **Admin action (as server admin, connected to `clic_chat`):**
+  ```sql
+  GRANT CREATE ON SCHEMA public TO clic_app;
+  CREATE EXTENSION IF NOT EXISTS vector;
+  CREATE EXTENSION IF NOT EXISTS azure_ai;
+  ```
+  Then re-run `npx prisma migrate deploy` as `clic_app`.
+
+- **Status 2026-09-08: DONE.** Baseline `20260908000000_baseline` deployed; `clic_chunks` + `judgment_chunks` verified (PKs, FKs → ClicPage/Judgment CASCADE, `embedding vector`, `tsv`, `cjk_tokens`).
+- Lesson: keep `CREATE EXTENSION` out of migrations — untrusted extensions (`vector`) fail as `clic_app`; provision as infra (T01) instead. A `resolve --rolled-back` + header removal fixed P3009.

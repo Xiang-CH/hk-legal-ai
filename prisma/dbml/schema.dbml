@@ -18,6 +18,7 @@ Table ClicPage {
   referencingLegislationSections LegislationSection [not null]
   referencingLegislationCaps LegislationCap [not null]
   referencingJudgments Judgment [not null]
+  chunks clic_chunks [not null]
 
   indexes {
     (nid, languageCode) [unique]
@@ -105,6 +106,7 @@ Table Judgment {
   referencingJudgments Judgment [not null]
   referencedByJudgments Judgment [not null]
   parallelCitations ParallelCitations [not null]
+  chunks judgment_chunks [not null]
 }
 
 Table ParallelCitations {
@@ -125,6 +127,45 @@ Table Case {
   cjrId Int [not null]
   cjrDis Int [not null]
   judgments Judgment [not null]
+}
+
+Table clic_chunks {
+  id BigInt [pk, increment]
+  nid Int [not null]
+  chunkNo Int [not null]
+  languageCode String [not null]
+  title String [not null]
+  content String [not null]
+  url String [not null]
+  topic String [not null]
+  context String
+  cjkTokens String
+  page ClicPage [not null]
+
+  indexes {
+    (nid, languageCode, chunkNo) [unique]
+  }
+}
+
+Table judgment_chunks {
+  id BigInt [pk, increment]
+  judgmentId Int [not null]
+  chunkNo Int [not null]
+  languageCode String [not null]
+  neutralCitation String
+  courtName String
+  year Int
+  date DateTime
+  parties String
+  content String [not null]
+  summarySource String
+  url String
+  cjkTokens String
+  judgment Judgment [not null]
+
+  indexes {
+    (judgmentId, chunkNo) [unique]
+  }
 }
 
 Table ClicPageRelationToClicPage {
@@ -187,3 +228,7 @@ Ref: LegislationSection.(capNumber, languageCode) > LegislationCap.(capNumber, l
 Ref: Interpretation.(capNumber, languageCode) > LegislationCap.(capNumber, languageCode) [delete: No Action]
 
 Ref: ParallelCitations.judgmentId > Judgment.id
+
+Ref: clic_chunks.(nid, languageCode) > ClicPage.(nid, languageCode) [delete: Cascade]
+
+Ref: judgment_chunks.judgmentId > Judgment.id [delete: Cascade]
