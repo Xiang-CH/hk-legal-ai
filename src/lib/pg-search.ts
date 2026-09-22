@@ -43,6 +43,7 @@ export interface PgScoredRow {
 export interface ClicChunkHit extends PgScoredRow {
 	nid: number;
 	chunk_no: number;
+	languageCode: string;
 	title: string;
 	content: string;
 	url: string;
@@ -155,7 +156,8 @@ export function searchClicChunks(query: string, opts: PgSearchOpts): Promise<Cli
 		table: "clic_chunks",
 		query,
 		opts,
-		finalSelect: `SELECT c.nid, c.chunk_no AS "chunk_no", c.title, c.content, c.url, c.topic, c.context,
+		finalSelect: `SELECT c.nid, c.chunk_no AS "chunk_no", c.language_code AS "languageCode",
+       c.title, c.content, c.url, c.topic, c.context,
        f.lexical_rank::int AS "lexical_rank", f.vector_distance::float8 AS "vector_distance",
        f.rrf::float8 AS "rrf_score",
        ${snippetSql("c.content")}

@@ -1,13 +1,18 @@
 import { prisma } from "@/lib/prisma";
+import { z } from "zod";
 
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
-import { chatAgent } from "@/lib/chat-agent";
+import { chatDataSchemas, metadataSchema } from "@/lib/types";
+import { createChatAgent, createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
+import { createAgenticChatResponse } from "@/lib/agent-stream";
+import { searchTools } from "@/lib/search-tools";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { sourcePrompt } from "@/lib/prompts";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
 	convertToModelMessages,
+	safeValidateUIMessages,
 	toUIMessageStream,
 } from "ai";
 import { searchClic, searchJudgmentSummary, RERANK_TOP_CLIC, RERANK_TOP_JUDGMENT } from "./helper";
@@ -26,22 +31,43 @@ import { langfuseSpanProcessor } from "@/instrumentation";
 /* T09: candidates per corpus entering the single global rerank call (cost + 429 bound). */
 const RERANK_CANDIDATE_CAP = 30;
 
+const chatRequestSchema = z.object({
+	messages: z.array(z.unknown()),
+	maxSteps: z.number().int().min(1).optional(),
+	searchDepth: z.number().int().min(1).optional(),
+});
+
+type ChatRequest = z.infer<typeof chatRequestSchema>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
+function normalizeMessageMetadata(messages: unknown[]): unknown[] {
+	return messages.map((message) => {
+		if (!isRecord(message) || "metadata" in message) return message;
+		return { ...message, metadata: {} };
+	});
+}
+
+function configuredMaxSteps(): number {
+	const configured = Number(process.env.AGENTIC_MAX_STEPS ?? DEFAULT_AGENT_MAX_STEPS);
+	return Number.isFinite(configured)
+		? Math.min(AGENT_MAX_STEPS_CAP, Math.max(1, Math.floor(configured)))
+		: DEFAULT_AGENT_MAX_STEPS;
+}
+
+function resolveMaxSteps(requested: number | undefined): number {
+	const value = requested ?? configuredMaxSteps();
+	return Math.min(AGENT_MAX_STEPS_CAP, Math.max(1, value));
+}
+
 /**
  * Note: Prisma middlewares ($use) are not available in the current client types.
  * We handle timeouts per-query instead of using prisma.$use middleware.
  */
 
-const handler = async (req: Request) => {
-	let { messages, searchDepth } = (await req.json()) as {
-		messages: MyUIMessage[];
-		searchDepth?: number;
-	};
-
-	if (!searchDepth){
-		searchDepth = 2;
-	}
-	// console.log("searchDepth: ", searchDepth);
-
+async function handleLegacyChat(messages: MyUIMessage[], searchDepth: number) {
 	// Set session id and user id on active trace
 	const modelMessages = await convertToModelMessages(messages);
 	const inputText = modelMessages[modelMessages.length - 1].content;
@@ -175,9 +201,6 @@ const handler = async (req: Request) => {
 						title: result.title,
 						providerMetadata: {
 							custom: {
-								score: result.score || null,
-								caption: result.caption ?? "",
-								// T11 pg contract (additive mirrors; score~=rrf, caption~=snippet)
 								rrf_score: result.rrf_score ?? result.score ?? null,
 								rerank_score: rerank_score ?? null,
 								snippet: result.snippet ?? result.caption ?? "",
@@ -194,15 +217,9 @@ const handler = async (req: Request) => {
 						title: result.neutralCitation,
 						providerMetadata: {
 							custom: {
-								score: result.score || null,
-								caption: result.caption ?? "",
-								// T11 pg contract (additive mirrors; score~=rrf, caption~=snippet)
 								rrf_score: result.rrf_score ?? result.score ?? null,
 								rerank_score: rerank_score ?? null,
 								snippet: result.snippet ?? result.caption ?? "",
-								courtName: result.courtName,
-								year: result.year,
-								parties: result.parties,
 							},
 						},
 					});
@@ -345,9 +362,9 @@ const handler = async (req: Request) => {
 
 				// Filter out duplicate legislation results
 				uniqueLegislationResults = legislationResults.filter((legislation, index, self) => {
-					const key = legislation.url;
-					return index === self.findIndex((l) =>
-						l.url === key
+					const sourceId = `cap-${legislation.capNumber}-${legislation.sectionNumber}`;
+					return index === self.findIndex((item) =>
+						`cap-${item.capNumber}-${item.sectionNumber}` === sourceId
 					);
 				});
 				// console.log("Unique Legislation Results: ", uniqueLegislationResults);
@@ -357,20 +374,14 @@ const handler = async (req: Request) => {
 				for (const legislation of uniqueLegislationResults) {
 					writer.write({
 						type: "source-url",
-						sourceId: `cap-${legislation.capNumber}-${legislation.sectionNumber}-${legislation.subsectionNumber || "none"}`,
+						sourceId: `cap-${legislation.capNumber}-${legislation.sectionNumber}`,
 						url: legislation.url,
 						title: `Cap ${legislation.capNumber}, ${legislation.sectionNumber}: ${legislation.capTitle}`,
 						providerMetadata: {
 							custom: {
-								capTitle: legislation.capTitle,
-								sectionHeading: legislation.sectionHeading,
-								score: legislation.score || null,
-								rerankerScore: legislation.rerankerScore || null,
-								caption: legislation.sectionHeading,
-								// T11 pg contract (additive): SQL graph path has no
-								// fusion scores, so snippet mirrors the heading until T12.
-								snippet: legislation.snippet ?? legislation.sectionHeading,
+								rrf_score: legislation.rrf_score ?? legislation.score ?? null,
 								rerank_score: legislation.rerank_score ?? legislation.rerankerScore ?? null,
+								snippet: legislation.snippet ?? legislation.sectionHeading,
 							},
 						},
 					});
@@ -391,7 +402,7 @@ const handler = async (req: Request) => {
 			});
 			// console.log("modelMessages: ", modelMessages);
 
-			const result = await chatAgent.stream({
+			const result = await createLegacyChatAgent().stream({
 				prompt: modelMessages,
 				onEnd({ usage, text, reasoningText }) {
 						// Update trace with final output after stream completes
@@ -423,6 +434,10 @@ const handler = async (req: Request) => {
 						writer.write({
 							type: "message-metadata",
 							messageMetadata: {
+								searchMode: "legacy",
+								maxSteps: 1,
+								stepCount: 1,
+								toolCallCount: 0,
 								searchQuery: searchQueries.join("\n"),
 								searchQueries: searchQueries,
 								usage: fullUsage,
@@ -462,10 +477,52 @@ const handler = async (req: Request) => {
 	});
 
 	return createUIMessageStreamResponse({ stream });
-};
+}
+
+async function handleChatRequest(req: Request): Promise<Response> {
+	let body: unknown;
+	try {
+		body = await req.json();
+	} catch {
+		return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+	}
+
+	const parsedRequest = chatRequestSchema.safeParse(body);
+	if (!parsedRequest.success) {
+		return Response.json({ error: "Invalid chat request", issues: parsedRequest.error.issues }, { status: 400 });
+	}
+
+	const request: ChatRequest = parsedRequest.data;
+	const validated = await safeValidateUIMessages<MyUIMessage>({
+		messages: normalizeMessageMetadata(request.messages),
+		metadataSchema,
+		dataSchemas: chatDataSchemas,
+		tools: searchTools,
+	});
+	if (!validated.success) {
+		return Response.json({ error: "Invalid chat messages", detail: validated.error.message }, { status: 400 });
+	}
+
+	const modelMessages = await convertToModelMessages(validated.data);
+	const inputText = modelMessages[modelMessages.length - 1]?.content ?? "";
+	updateActiveObservation({ input: inputText });
+	updateActiveTrace({ name: "chat-message", input: inputText });
+
+	const maxSteps = resolveMaxSteps(request.maxSteps);
+	if (process.env.AGENTIC_SEARCH_ENABLED === "true") {
+		return createAgenticChatResponse({
+			agent: createChatAgent(maxSteps),
+			messages: validated.data,
+			maxSteps,
+			abortSignal: req.signal,
+		});
+	}
+
+	return handleLegacyChat(validated.data, request.searchDepth ?? 2);
+}
 
 // Wrap handler with observe() to create a Langfuse trace
-export const POST = observe(handler, {
+export const POST = observe(handleChatRequest, {
 	name: "handle-chat-message",
 	captureInput: true,
     captureOutput: true,

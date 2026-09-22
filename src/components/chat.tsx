@@ -17,7 +17,7 @@ export function Chat() {
   const chatId = "001";
 
   const [input, setInput] = useState('');
-  const [searchDepth, setSearchDepth] = useState(2);
+  const [maxSteps, setMaxSteps] = useState(5);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -48,9 +48,6 @@ export function Chat() {
         toast.error(`Error: ${error.message}`);
       }
     },
-    onFinish: (data) => {
-      console.log(data);
-    }
   });
 
   const [messagesContainerRef, scrollToElement] =
@@ -63,7 +60,11 @@ export function Chat() {
       return part.text.trim().length > 0;
     }
 
-    return false;
+    return part.type === "tool-search_clic" ||
+      part.type === "tool-search_judgments" ||
+      part.type === "tool-search_legislation" ||
+      part.type === "tool-get_ordinance_section" ||
+      part.type === "tool-get_case";
   }) ?? false;
 
   useEffect(() => {
@@ -93,20 +94,31 @@ export function Chat() {
           <div className="mb-4">
             <h3 className="font-semibold mb-2">Settings</h3>
             <div className="flex gap-2 items-center ml-2">
-              <span className="text-xs">Search Depth: </span>
+              <span className="text-xs">Max Steps: </span>
               <Slider
                 className="max-w-64"
-                value={[searchDepth]}
-                max={4}
+                value={[maxSteps]}
+                max={8}
                 min={1}
                 step={1}
                 onValueChange={(value) => {
-                  setSearchDepth(value[0])
+                  setMaxSteps(value[0] ?? 5);
                 }}
               />
-              <span className="text-xs">{searchDepth}</span>
+              <span className="text-xs">{maxSteps}</span>
             </div>
           </div>
+
+          {messages[messages.length - 1]?.metadata?.searchMode && status !== "submitted" && (
+            <div className="mb-4">
+              <h3 className="font-semibold mb-2">Agent Run</h3>
+              <div className="text-xs text-muted-foreground">
+                {messages[messages.length - 1]?.metadata?.searchMode === "agent" ? "Agentic search" : "Legacy fan-out"} ·{" "}
+                {messages[messages.length - 1]?.metadata?.stepCount ?? 0} steps ·{" "}
+                {messages[messages.length - 1]?.metadata?.toolCallCount ?? 0} tools
+              </div>
+            </div>
+          )}
 
           {(messages[messages.length - 1]?.metadata?.searchQuery || messages[messages.length - 1]?.metadata?.searchQueries) && status !== "submitted" && (
             <div className="mb-4">
@@ -166,7 +178,7 @@ export function Chat() {
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) => sendMessage({ text: message }, { body: { searchDepth: searchDepth } })}
+            sendMessage={(message) => sendMessage({ text: message }, { body: { maxSteps } })}
           />
         </form>
       </div>

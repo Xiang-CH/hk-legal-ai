@@ -8,6 +8,8 @@
     "postinstall": "pnpm prisma generate",
     "start": "next start",
     "lint": "eslint .",
+    "smoke:agentic": "node scripts/smoke-agentic.mjs",
+    "smoke:legacy": "node scripts/smoke-agentic.mjs --legacy",
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:format": "prisma format",

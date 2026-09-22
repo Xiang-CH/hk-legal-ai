@@ -1,4 +1,5 @@
 import { SourceUrlUIPart } from "ai";
+import { z } from "zod";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const GroundingsDisplay = ({
@@ -78,37 +79,47 @@ export const GroundingsDisplay = ({
   );
 };
 
-/* T11 pg contract: the route emits one `source-url` part per POST-RERANK final
- * only (never fusion candidates), with providerMetadata.custom carrying the pg
- * fields { rrf_score, rerank_score, snippet }. Legacy Azure aliases are read as
- * fallback only: score ~= rrf_score, caption ~= snippet, rerankerScore ~=
- * rerank_score. captionHighlights is dead (never written by T08+ route) and
- * ignored. When RERANK_ENABLED=false the route writes rerank_score: null, so
- * the UI shows fusion (RRF) order with no rerank badge — never breaks. */
-type PgSourceMeta = {
-  rrf_score?: number | null;
-  rerank_score?: number | null;
-  snippet?: string;
-  // Compat aliases (older writers / other surfaces). Read-only fallback.
-  score?: number | null;
-  caption?: string;
-  rerankerScore?: number | null;
-};
+const sourceMetadataSchema = z.strictObject({
+  rrf_score: z.number().nullable(),
+  rerank_score: z.number().nullable(),
+  snippet: z.string(),
+});
+
+const legacySourceMetadataSchema = z.strictObject({
+  rrf_score: z.number().nullable().optional(),
+  rerank_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
+  score: z.number().nullable().optional(),
+  caption: z.string().optional(),
+  rerankerScore: z.number().nullable().optional(),
+});
+
+type SourceMetadata = z.infer<typeof sourceMetadataSchema>;
+
+function parseSourceMetadata(value: unknown): SourceMetadata {
+  const current = sourceMetadataSchema.safeParse(value);
+  if (current.success) return current.data;
+
+  const legacy = legacySourceMetadataSchema.safeParse(value);
+  if (legacy.success) {
+    return {
+      rrf_score: legacy.data.rrf_score ?? legacy.data.score ?? null,
+      rerank_score: legacy.data.rerank_score ?? legacy.data.rerankerScore ?? null,
+      snippet: legacy.data.snippet ?? legacy.data.caption ?? "",
+    };
+  }
+
+  return { rrf_score: null, rerank_score: null, snippet: "" };
+}
 
 function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
   return (
     <div>
       <div className="space-y-3">
-        {sources.map((source, index) => {
-          const metaData = (source.providerMetadata?.custom ?? {}) as PgSourceMeta;
-          const snippet =
-            (typeof metaData.snippet === "string" && metaData.snippet) ||
-            (typeof metaData.caption === "string" && metaData.caption) ||
-            "";
-          const rrfScore = metaData.rrf_score ?? metaData.score ?? null;
-          const rerankScore = metaData.rerank_score ?? metaData.rerankerScore ?? null;
+        {sources.map((source) => {
+          const metadata = parseSourceMetadata(source.providerMetadata?.custom);
           return (
-            <div key={index} className="p-3 bg-muted/50 rounded-lg">
+            <div key={source.sourceId} className="p-3 bg-muted/50 rounded-lg">
               <h4 className="font-medium">
                 <a
                   href={source.url}
@@ -119,13 +130,13 @@ function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
                 </a>
               </h4>
               <p className="mt-1 text-sm max-h-72 text-ellipsis overflow-auto">
-                {snippet}
+                {metadata.snippet}
               </p>
-              {(rerankScore != null || rrfScore != null) && (
+              {(metadata.rerank_score != null || metadata.rrf_score != null) && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  {rerankScore != null
-                    ? `Rerank: ${rerankScore.toFixed(2)} · RRF: ${rrfScore?.toFixed(2) ?? "n/a"}`
-                    : `RRF: ${rrfScore?.toFixed(2) ?? "n/a"}`}
+                  {metadata.rerank_score != null
+                    ? `Rerank: ${metadata.rerank_score.toFixed(2)} · RRF: ${metadata.rrf_score?.toFixed(2) ?? "n/a"}`
+                    : `RRF: ${metadata.rrf_score?.toFixed(2) ?? "n/a"}`}
                 </p>
               )}
             </div>

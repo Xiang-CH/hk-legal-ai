@@ -14,6 +14,103 @@ import { inputCostPerToken, outputCostPerToken, cachedInputCostPerToken } from "
 
 import React from "react";
 
+type MessagePart = MyUIMessage["parts"][number];
+type ChatToolPart = Extract<MessagePart, { type: `tool-${string}` }>;
+
+const toolLabels = {
+  "tool-search_clic": "Search CLIC articles",
+  "tool-search_judgments": "Search case law",
+  "tool-search_legislation": "Search legislation",
+  "tool-get_ordinance_section": "Read ordinance section",
+  "tool-get_case": "Read case details",
+} satisfies Record<ChatToolPart["type"], string>;
+
+function isChatToolPart(part: MessagePart): part is ChatToolPart {
+  return (
+    part.type === "tool-search_clic" ||
+    part.type === "tool-search_judgments" ||
+    part.type === "tool-search_legislation" ||
+    part.type === "tool-get_ordinance_section" ||
+    part.type === "tool-get_case"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function toolResultCount(part: ChatToolPart): number | null {
+  if (part.state !== "output-available") return null;
+  const output: unknown = part.output;
+  if (!isRecord(output)) return null;
+  if (Array.isArray(output.results)) return output.results.length;
+  if (Array.isArray(output.sections)) return output.sections.length;
+  if (Array.isArray(output.cases)) {
+    return output.cases.reduce((total, item) => {
+      if (!isRecord(item) || !Array.isArray(item.judgments)) return total;
+      return total + item.judgments.length;
+    }, 0);
+  }
+  return null;
+}
+
+function toolState(part: ChatToolPart): { label: string; pending: boolean; failed: boolean } {
+  switch (part.state) {
+    case "input-streaming":
+    case "input-available":
+      return { label: "Searching...", pending: true, failed: false };
+    case "approval-requested":
+      return { label: "Approval required", pending: true, failed: false };
+    case "output-available": {
+      const count = toolResultCount(part);
+      return {
+        label: count === null ? "Completed" : `Completed · ${count} result${count === 1 ? "" : "s"}`,
+        pending: false,
+        failed: false,
+      };
+    }
+    case "output-error":
+      return { label: "Search failed", pending: false, failed: true };
+    case "output-denied":
+      return { label: "Search denied", pending: false, failed: true };
+    case "approval-responded":
+      return {
+        label: part.approval.approved ? "Approved" : "Search denied",
+        pending: false,
+        failed: !part.approval.approved,
+      };
+    default: {
+      const exhaustive: never = part;
+      return exhaustive;
+    }
+  }
+}
+
+function ToolProgress({ part }: { part: ChatToolPart }) {
+  const state = toolState(part);
+  return (
+    <div
+      className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm"
+      data-pending={state.pending}
+    >
+      <div className="min-w-0">
+        <div className="font-medium">{toolLabels[part.type]}</div>
+        <div className={state.failed ? "text-destructive" : "text-muted-foreground"}>
+          {state.label}
+        </div>
+      </div>
+      {state.pending && (
+        <motion.span
+          aria-label="Tool running"
+          className="size-2 shrink-0 rounded-full bg-primary"
+          animate={{ opacity: [0.25, 1, 0.25] }}
+          transition={{ duration: 1.2, repeat: Infinity }}
+        />
+      )}
+    </div>
+  );
+}
+
 const PreviewMessage = React.forwardRef<
   HTMLDivElement,
   {
@@ -26,11 +123,19 @@ const PreviewMessage = React.forwardRef<
   const textParts = message.parts.filter((part) => part.type === "text");
   const reasoningParts = message.parts.filter((part) => part.type === "reasoning");
   const fileParts = message.parts.filter((part) => part.type === "file");
+  const toolParts = message.parts.filter(isChatToolPart);
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
+  const completedToolCount = toolParts.filter((part) => part.state === "output-available").length;
 
   if (message.role === "user" && !hasTextContent) return null;
-  if (message.role === "assistant" && !hasTextContent && !hasReasoningContent && fileParts.length === 0) return null;
+  if (
+    message.role === "assistant" &&
+    !hasTextContent &&
+    !hasReasoningContent &&
+    toolParts.length === 0 &&
+    fileParts.length === 0
+  ) return null;
 
   // URL regex pattern
   // const urlRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
@@ -60,7 +165,7 @@ const PreviewMessage = React.forwardRef<
           "group-data-[role=user]/message:bg-primary group-data-[role=user]/message:text-primary-foreground flex gap-4 group-data-[role=user]/message:px-3 w-full group-data-[role=user]/message:w-fit group-data-[role=user]/message:ml-auto group-data-[role=user]/message:max-w-2xl group-data-[role=user]/message:py-2 rounded-xl"
         )}
       >
-        {message.role === "assistant" && (textContent || hasReasoningContent) && (
+        {message.role === "assistant" && (textContent || hasReasoningContent || toolParts.length > 0) && (
           <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
             <SparklesIcon size={14} />
           </div>
@@ -75,6 +180,10 @@ const PreviewMessage = React.forwardRef<
 
           {message.role === "assistant" &&
             message.parts?.map((part, index) => {
+              if (isChatToolPart(part)) {
+                return <ToolProgress key={part.toolCallId} part={part} />;
+              }
+
               if (part.type === "reasoning" && part.text.trim().length > 0) {
                 const isStreaming = part.state === "streaming";
 
@@ -109,6 +218,12 @@ const PreviewMessage = React.forwardRef<
               }
               return null;
             })}
+
+          {message.role === "assistant" && toolParts.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              Search progress: {completedToolCount}/{toolParts.length} completed
+            </div>
+          )}
 
           {/* Display usage information if available */}
           {message.role === "assistant" && isDevMode && message.metadata?.usage && (

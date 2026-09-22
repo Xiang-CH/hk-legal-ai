@@ -139,12 +139,12 @@ export async function rerankScores(
 export async function applyRerank<T>(
 	query: string,
 	items: T[],
-	opts: { getText: (item: T) => string; topN: number; usage?: RerankUsage },
+	opts: { getText: (item: T) => string; topN: number; timeoutMs?: number; usage?: RerankUsage },
 ): Promise<{ item: T; rerank_score?: number }[]> {
 	const scores = await rerankScores(
 		query,
 		items.map(opts.getText),
-		{ topN: Math.min(opts.topN, items.length), usage: opts.usage },
+		{ topN: Math.min(opts.topN, items.length), timeoutMs: opts.timeoutMs, usage: opts.usage },
 	);
 	if (!scores) return items.slice(0, opts.topN).map((item) => ({ item }));
 	return [...items.keys()]

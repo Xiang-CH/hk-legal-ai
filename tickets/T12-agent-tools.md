@@ -12,10 +12,11 @@
 - **Depends on:** T16 (zod compat), T08, T09. **Blocks:** T13, T14.
 - **Size:** L.
 
-## Implementation notes (T12 done, uncommitted)
+## Implementation notes (T12 done)
 - **File:** `src/lib/search-tools.ts` (only source file; all schemas/types local for T16).
-- `tool()` from `ai` v5 + zod v4 schemas; `searchTools` record exported for T13/T14 wiring.
-- Retrieval path per search_* tool: `getEmbeddings` (helper.ts, text-embedding-3-large) → `search*Clic/Judgment/LegislationChunks` (pg-search.ts fusion top-30) → in-tool `(id,chunk_no)` dedupe → `fuseRerank` (applyRerank, rerank timeout 9s, any failure → fusion order + `rerank_score: null`).
+- `tool()` from `ai` v7 + zod v4 schemas; `searchTools` record exported for T13-T15 wiring.
+- Retrieval path per search_* tool: `getEmbeddings` (helper.ts, text-embedding-3-large) → `search*Clic/Judgment/LegislationChunks` (pg-search.ts fusion top-30) → in-tool `(id,chunk_no)` dedupe → `fuseRerank` (applyRerank, rerank timeout 2s, any failure → fusion order + `rerank_score: null`).
+- CLIC `topic` and `languageCode` are preferred filters: an empty preferred result set retries once over English/all topics because the current corpus stores internal topic keys and has sparse language lanes.
 - `RERANK_ENABLED=false` path needs no branch: `rerankScores` returns null internally → fusion order, scores null. Verified by reading `src/lib/rerank.ts`.
 - `search_legislation` graph follow-up (depth ≤ 2): top-10 sectionIds → one `legislationSection.findMany` with `referencingLegislationSections` (1 level, take 5) + `referencedByClicPages` nids (take 5). No-keywords path fabricates `{chunk_no: 0, rrf_score: 0→null}` rows from a direct `legislationSection` id lookup so the graph walk still runs.
 - `get_ordinance_section` / `get_case` match the arg names promised in `src/lib/prompts/search.ts` (`cap_no`/`section_no`, `action_no`/`case_name`); `get_case` uses `contains, mode: insensitive`, take 5/5 caps.

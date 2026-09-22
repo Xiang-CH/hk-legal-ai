@@ -1,22 +1,51 @@
-import { ToolLoopAgent } from "ai";
+import { ToolLoopAgent, stepCountIs } from "ai";
 
 import { azure } from "@/app/api/chat/helper";
 import { searchPrompt } from "@/lib/prompts";
+import { searchTools } from "@/lib/search-tools";
 
-/**
- * T16 baseline: one model step and no tools, matching the legacy route exactly.
- * T13 can add the T12 search tools and a multi-step stop condition here.
- */
-export const chatAgent = new ToolLoopAgent({
-  model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
-  instructions: searchPrompt,
-  allowSystemInMessages: true,
-  tools: {},
-  experimental_telemetry: { isEnabled: true },
-  providerOptions: {
-    openai: {
-      reasoningEffort: "medium",
-      reasoningSummary: "auto",
+export const DEFAULT_AGENT_MAX_STEPS = 5;
+export const AGENT_MAX_STEPS_CAP = 8;
+
+export function createChatAgent(maxSteps: number) {
+  return new ToolLoopAgent({
+    model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
+    instructions: searchPrompt,
+    allowSystemInMessages: true,
+    tools: searchTools,
+    stopWhen: stepCountIs(maxSteps),
+    prepareStep: ({ stepNumber }) =>
+      stepNumber >= maxSteps - 1
+        ? {
+            activeTools: [],
+            toolChoice: "none",
+          }
+        : undefined,
+    experimental_telemetry: { isEnabled: true },
+    providerOptions: {
+      openai: {
+        reasoningEffort: "medium",
+        reasoningSummary: "auto",
+      },
     },
-  },
-});
+  });
+}
+
+export type ChatAgent = ReturnType<typeof createChatAgent>;
+
+export function createLegacyChatAgent() {
+  return new ToolLoopAgent({
+    model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
+    instructions: searchPrompt,
+    allowSystemInMessages: true,
+    tools: {},
+    stopWhen: stepCountIs(1),
+    experimental_telemetry: { isEnabled: true },
+    providerOptions: {
+      openai: {
+        reasoningEffort: "medium",
+        reasoningSummary: "auto",
+      },
+    },
+  });
+}
