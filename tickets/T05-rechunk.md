@@ -10,3 +10,8 @@
 - **Acceptance:** JSONs regenerate deterministically; chunk counts logged per language; no `@azure/search-documents` import remains in these scripts.
 - **Depends on:** T04. **Blocks:** T06.
 - **Size:** M.
+
+## Status 2026-09-22 — scripts retargeted, awaiting run
+- `index-clic.ts` / `index-judgment-summary.ts` rewritten chunk-only: Azure Search + embedding code deleted (zero `search-documents` refs), `embedding: null` output, `--lang` flag on clic, `indexOf` chunk_no bug fixed (index-based, deterministic).
+- BEFORE running: back up the T06 EN cache — `cp chunks-en.json chunks-en.cached.json` + `cp judgment-summaries.json judgment-summaries.cached.json` (cached files hold all 3,461 EN embeddings; regen overwrites).
+- Run: `npx -y tsx scripts/index-clic.ts --lang=en` then `npx -y tsx scripts/index-judgment-summary.ts`. Report the two chunk totals (expect drift vs cached 3244/217).

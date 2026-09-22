@@ -1,34 +1,20 @@
 import { PrismaClient } from "../src/prisma/client/index.js";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { AzureKeyCredential, SearchClient } from "@azure/search-documents";
 import { TokenTextSplitter } from "@langchain/textsplitters";
-import AzureOpenAI from "openai";
+// T05 — chunk-only. No embeddings (T06), no Azure Search upload (deleted).
+// Reads Judgment summaries from pg, TokenTextSplitter(8000/1000, o200k_base),
+// writes scripts/index-output/judgment-summaries.json with embedding=null.
 const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
 const prisma = new PrismaClient({ adapter });
 
 const MAX_CHUNK_SIZE = 8000;
 const MAX_CHUNK_OVERLAP = 1000;
 const ENCODING_NAME = "o200k_base";
-const EMBEDDING_BATCH_SIZE = 10;
 
 const splitter = new TokenTextSplitter({
     chunkSize: MAX_CHUNK_SIZE,
     chunkOverlap: MAX_CHUNK_OVERLAP,
     encodingName: ENCODING_NAME,
-});
-
-const searchClient = new SearchClient(
-    process.env.AZURE_SEARCH_ENDPOINT || "",
-    process.env.JUDGMENT_SUMMARY_INDEX_NAME || "",
-    new AzureKeyCredential(process.env.AZURE_SEARCH_KEY || "")
-);
-
-const embeddingClient = new AzureOpenAI({
-    apiKey: process.env.AZURE_OPENAI_KEY || undefined,
-    baseURL: process.env.AZURE_OPENAI_ENDPOINT + "/openai/v1/" || undefined,
-    defaultQuery: {
-        "api-version": "preview"
-    }
 });
 
 type JudgmentSummaryDocument = {
@@ -46,56 +32,16 @@ type JudgmentSummaryDocument = {
     embedding: number[] | null;
 }
 
-async function getEmbeddingsByBatch(texts: string[]) {
-    const embeddings = [];
-    for (let i = 0; i < texts.length; i += EMBEDDING_BATCH_SIZE) {
-        const batch = texts.slice(i, i + EMBEDDING_BATCH_SIZE);
-        console.log(`Embedding batch ${Math.floor(i / EMBEDDING_BATCH_SIZE) + 1} of ${Math.ceil(texts.length / EMBEDDING_BATCH_SIZE)}`);
-        const batchEmbeddings = await embeddingClient.embeddings.create({
-            model: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || "text-embedding-3-large",
-            input: batch,   
-        });
-        embeddings.push(...batchEmbeddings.data.map((embedding) => embedding.embedding));
-    }
-    return embeddings;
-}
-
 function saveDocumentsToFileSystem(documents: JudgmentSummaryDocument[]) {
     const fs = require('fs');
     const path = require('path');
     const outputDir = path.join(__dirname, 'index-output');
     if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir);
+        fs.mkdirSync(outputDir, { recursive: true });
     }
     const outputFile = path.join(outputDir, `judgment-summaries.json`);
-    fs.writeFileSync(outputFile, JSON.stringify(documents, null, 2));
-}
-
-async function uploadIndexByBatch(documents: JudgmentSummaryDocument[]) {
-    const batch = [];
-    for (const doc of documents) {
-        batch.push(doc);
-        if (batch.length === 1000) {
-            console.log(`Indexing batch of ${batch.length} documents`);
-            const res = await searchClient.mergeOrUploadDocuments(batch);
-            const failed = res.results.filter(result => !result.succeeded);
-            if (failed.length > 0) {
-                console.log(`Failed to index ${failed.length} documents:`, failed);
-            } else {
-                console.log(`Successfully indexed ${batch.length} documents`); 
-            }
-            batch.length = 0;
-        }
-    }
-    if (batch.length > 0) {
-        const res = await searchClient.mergeOrUploadDocuments(batch);
-        const failed = res.results.filter(result => !result.succeeded);
-        if (failed.length > 0) {
-            console.log(`Failed to index ${failed.length} documents:`, failed);
-        } else {
-            console.log(`Successfully indexed ${batch.length} documents`);
-        }
-    }
+    fs.writeFileSync(outputFile, JSON.stringify(documents));
+    console.log(`wrote ${documents.length} documents to ${outputFile}`);
 }
 
 async function main() {
@@ -143,27 +89,7 @@ async function main() {
 
     console.log(`Total number of chunks: ${documents.length}`);
 
-    // Get embeddings for all summary chunks
-    const texts = documents.map(doc => doc.summary);
-    const embeddings = await getEmbeddingsByBatch(texts);
-    for (let i = 0; i < documents.length; i++) {
-        documents[i].embedding = embeddings[i];
-    }
-
-    // Save documents to the file system
     saveDocumentsToFileSystem(documents);
-
-    // Index documents
-    await uploadIndexByBatch(documents);
-}
-
-async function indexFromFile() {
-    const fs = require('fs');
-    const path = require('path');
-    const inputDir = path.join(__dirname, 'index-output');
-    const inputFile = path.join(inputDir, `judgment-summaries.json`);
-    const documents = JSON.parse(fs.readFileSync(inputFile, 'utf8'));
-    await uploadIndexByBatch(documents);
 }
 
 main()
