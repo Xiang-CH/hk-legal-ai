@@ -8,6 +8,8 @@ const clicSchema = z.object({
   url: z.string(),
   topic: z.string(),
   chunk_no: z.number(),
+  // T11: legacy Azure Search aliases — read-only compat fallback for older
+  // writers. New contract is { rrf_score, rerank_score, snippet } below.
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
   caption: z.string().optional(),
@@ -29,6 +31,7 @@ const legislationSchema = z.object({
   sectionHeading: z.string(),
   content: z.string(),
   url: z.string(),
+  // T11: legacy Azure Search aliases — compat fallback only.
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
   // T08 pg fusion extras
@@ -51,6 +54,8 @@ const judgmentSummarySchema = z.object({
   summary: z.string(),
   summarySource: z.string().nullable(),
   url: z.string(),
+  // T11: legacy Azure Search aliases — read-only compat fallback (score ~= rrf,
+  // caption ~= snippet). captionHighlights is dead, never written since T08.
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
   caption: z.string().optional(),

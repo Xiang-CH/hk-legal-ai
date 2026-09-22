@@ -78,17 +78,35 @@ export const GroundingsDisplay = ({
   );
 };
 
+/* T11 pg contract: the route emits one `source-url` part per POST-RERANK final
+ * only (never fusion candidates), with providerMetadata.custom carrying the pg
+ * fields { rrf_score, rerank_score, snippet }. Legacy Azure aliases are read as
+ * fallback only: score ~= rrf_score, caption ~= snippet, rerankerScore ~=
+ * rerank_score. captionHighlights is dead (never written by T08+ route) and
+ * ignored. When RERANK_ENABLED=false the route writes rerank_score: null, so
+ * the UI shows fusion (RRF) order with no rerank badge — never breaks. */
+type PgSourceMeta = {
+  rrf_score?: number | null;
+  rerank_score?: number | null;
+  snippet?: string;
+  // Compat aliases (older writers / other surfaces). Read-only fallback.
+  score?: number | null;
+  caption?: string;
+  rerankerScore?: number | null;
+};
+
 function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
   return (
     <div>
       <div className="space-y-3">
         {sources.map((source, index) => {
-          const metaData = source.providerMetadata?.custom as {
-            score: number | null;
-            rerankerScore: number | null;
-            caption: string;
-            captionHighlights: string;
-          };
+          const metaData = (source.providerMetadata?.custom ?? {}) as PgSourceMeta;
+          const snippet =
+            (typeof metaData.snippet === "string" && metaData.snippet) ||
+            (typeof metaData.caption === "string" && metaData.caption) ||
+            "";
+          const rrfScore = metaData.rrf_score ?? metaData.score ?? null;
+          const rerankScore = metaData.rerank_score ?? metaData.rerankerScore ?? null;
           return (
             <div key={index} className="p-3 bg-muted/50 rounded-lg">
               <h4 className="font-medium">
@@ -101,18 +119,13 @@ function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
                 </a>
               </h4>
               <p className="mt-1 text-sm max-h-72 text-ellipsis overflow-auto">
-                {source.providerMetadata?.custom.caption &&
-                  typeof source.providerMetadata.custom
-                    .caption === "string"
-                  ? source.providerMetadata.custom.caption
-                  : ""}
+                {snippet}
               </p>
-              {(metaData.rerankerScore || metaData.score) && (
+              {(rerankScore != null || rrfScore != null) && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Score:{" "}
-                  {metaData.rerankerScore
-                    ? metaData.rerankerScore.toFixed(2)
-                    : metaData.score?.toFixed(2)}
+                  {rerankScore != null
+                    ? `Rerank: ${rerankScore.toFixed(2)} · RRF: ${rrfScore?.toFixed(2) ?? "n/a"}`
+                    : `RRF: ${rrfScore?.toFixed(2) ?? "n/a"}`}
                 </p>
               )}
             </div>

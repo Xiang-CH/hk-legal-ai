@@ -174,7 +174,10 @@ const handler = async (req: Request) => {
 							custom: {
 								score: result.score || null,
 								caption: result.caption ?? "",
+								// T11 pg contract (additive mirrors; score~=rrf, caption~=snippet)
+								rrf_score: result.rrf_score ?? result.score ?? null,
 								rerank_score: rerank_score ?? null,
+								snippet: result.snippet ?? result.caption ?? "",
 							},
 						},
 					});
@@ -190,7 +193,10 @@ const handler = async (req: Request) => {
 							custom: {
 								score: result.score || null,
 								caption: result.caption ?? "",
+								// T11 pg contract (additive mirrors; score~=rrf, caption~=snippet)
+								rrf_score: result.rrf_score ?? result.score ?? null,
 								rerank_score: rerank_score ?? null,
+								snippet: result.snippet ?? result.caption ?? "",
 								courtName: result.courtName,
 								year: result.year,
 								parties: result.parties,
@@ -357,7 +363,11 @@ const handler = async (req: Request) => {
 								sectionHeading: legislation.sectionHeading,
 								score: legislation.score || null,
 								rerankerScore: legislation.rerankerScore || null,
-								caption: legislation.sectionHeading
+								caption: legislation.sectionHeading,
+								// T11 pg contract (additive): SQL graph path has no
+								// fusion scores, so snippet mirrors the heading until T12.
+								snippet: legislation.snippet ?? legislation.sectionHeading,
+								rerank_score: legislation.rerank_score ?? legislation.rerankerScore ?? null,
 							},
 						},
 					});
