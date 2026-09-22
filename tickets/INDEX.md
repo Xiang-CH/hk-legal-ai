@@ -19,7 +19,7 @@ Order: T01 → T02 → T03 → T04 → T05 → T06 → T07 → T08 → T09 → T
 | [ ] | T13 | Agent loop in chat route + prompt rewrite | T14, T15 |
 | [ ] | T14 | Streaming sources + UI for tool states | T15 |
 | [ ] | T15 | Agentic rollout: flags, smoke, kill-switch | — |
-| [ ] | T16 | Upgrade AI SDK 5 → 7 (ToolLoopAgent baseline) | T12–T14 |
+| [x] | T16 | Upgrade AI SDK 5 → 7 (ToolLoopAgent baseline) | T12–T14 |
 | [ ] | T17 | Legislation chunks (EN 205,779 indexed; sc/tc pending) | T08 |
 
 Source of truth: `plan.md` (§10 for agentic). Ticket files are the actionable split; update both if scope changes.

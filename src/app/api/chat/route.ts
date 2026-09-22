@@ -1,14 +1,14 @@
 import { prisma } from "@/lib/prisma";
 
-import { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
-import { azure } from "./helper";
+import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
+import { chatAgent } from "@/lib/chat-agent";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
-import { searchPrompt, sourcePrompt } from "@/lib/prompts";
+import { sourcePrompt } from "@/lib/prompts";
 import {
 	createUIMessageStream,
 	createUIMessageStreamResponse,
-	streamText,
 	convertToModelMessages,
+	toUIMessageStream,
 } from "ai";
 import { searchClic, searchJudgmentSummary, RERANK_TOP_CLIC, RERANK_TOP_JUDGMENT } from "./helper";
 import { applyRerank, createRerankUsage } from "@/lib/rerank";
@@ -32,7 +32,10 @@ const RERANK_CANDIDATE_CAP = 30;
  */
 
 const handler = async (req: Request) => {
-	let { messages, searchDepth } = await req.json();
+	let { messages, searchDepth } = (await req.json()) as {
+		messages: MyUIMessage[];
+		searchDepth?: number;
+	};
 
 	if (!searchDepth){
 		searchDepth = 2;
@@ -40,7 +43,7 @@ const handler = async (req: Request) => {
 	// console.log("searchDepth: ", searchDepth);
 
 	// Set session id and user id on active trace
-	const modelMessages = convertToModelMessages(messages);
+	const modelMessages = await convertToModelMessages(messages);
 	const inputText = modelMessages[modelMessages.length - 1].content;
 	// T09: the single global rerank per corpus scores against the ORIGINAL user
 	// question, not the rewritten queries (which served retrieval breadth).
@@ -388,19 +391,9 @@ const handler = async (req: Request) => {
 			});
 			// console.log("modelMessages: ", modelMessages);
 
-			try {
-				const result = streamText({
-					model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
-					system: searchPrompt,
-					messages: modelMessages,
-					experimental_telemetry: { isEnabled: true },
-					providerOptions: {
-						openai: {
-							reasoningEffort: 'medium',
-							reasoningSummary: 'auto',
-						},
-					},
-					onFinish({usage, text, reasoning}) {
+			const result = await chatAgent.stream({
+				prompt: modelMessages,
+				onEnd({ usage, text, reasoningText }) {
 						// Update trace with final output after stream completes
 						updateActiveObservation({
 							output: text,
@@ -414,14 +407,18 @@ const handler = async (req: Request) => {
 						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
 						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
 						const fullUsage = {
-							...usage,
+							inputTokens: usage.inputTokens,
+							outputTokens: usage.outputTokens,
+							totalTokens: usage.totalTokens,
+							reasoningTokens: usage.outputTokenDetails.reasoningTokens,
+							cachedInputTokens: usage.inputTokenDetails.cacheReadTokens,
 							rerankCalls: rerankUsage.calls,
 							rerankDocuments: rerankUsage.documents,
 							rerankCost,
 						};
 						console.log("Usage: ", fullUsage);
 						console.log("Rerank usage: ", rerankUsage);
-						console.log("Reasoning Text: ", reasoning);
+						console.log("Reasoning Text: ", reasoningText);
 
 						writer.write({
 							type: "message-metadata",
@@ -439,7 +436,12 @@ const handler = async (req: Request) => {
 							transient: true, // Won't be added to message history
 						});
 					},
-					onError: async (error) => {
+				});
+
+			writer.merge(toUIMessageStream({
+				stream: result.stream,
+				sendReasoning: true,
+				onError: (error) => {
 						updateActiveObservation({
 							output: error,
 							level: "ERROR"
@@ -448,17 +450,14 @@ const handler = async (req: Request) => {
 						updateActiveTrace({
 							output: error,
 						});
+
+						return "An error occurred.";
 					},
-				});
-
-				writer.merge(result.toUIMessageStream({
-					sendReasoning: true,
 				}));
-
-			} finally {
-				// Critical for serverless: flush traces before function terminates
-				await langfuseSpanProcessor.forceFlush();
-			}
+		},
+		onEnd: async () => {
+			// Critical for serverless: flush traces after the response stream closes.
+			await langfuseSpanProcessor.forceFlush();
 		},
 	});
 

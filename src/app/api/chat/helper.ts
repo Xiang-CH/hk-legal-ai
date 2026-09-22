@@ -2,7 +2,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { queryExtendPrompt } from "@/lib/prompts";
 import { generateObject, ModelMessage, embed } from "ai"
 import { z } from 'zod';
-import { ClicPage, LegislationSection, JudgmentSummary } from "@/lib/types";
+import type { ClicPage, LegislationSection, JudgmentSummary } from "@/lib/types";
 import { prisma } from "@/lib/prisma";
 import {
     searchClicChunks,
@@ -29,7 +29,6 @@ export async function rewriteQuery(messages: ModelMessage[]) {
     const QueryExpandFormatSchema = z.object({
         queries: z
             .array(z.string())
-            .default([])
             .describe('A list of search queries'),
     });
 

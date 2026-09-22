@@ -38,7 +38,7 @@ export function Chat() {
     status,
     stop
   } = useChat<MyUIMessage>({
-    experimental_throttle: 50,
+    throttle: 50,
     onError: (error) => {
       if (error.message.includes("Too many requests")) {
         toast.error(

@@ -1,4 +1,4 @@
-import { InferUITools, ToolSet, UIMessage } from 'ai';
+import type { DataUIPart, InferAgentUIMessage } from "ai";
 import z from 'zod';
 
 const clicSchema = z.object({
@@ -106,20 +106,27 @@ const metadataSchema = z.object({
   }).optional(),
 });
 
-type MyMetadata = z.infer<typeof metadataSchema>;
+export type MyMetadata = z.infer<typeof metadataSchema>;
 
-// const dataPartSchema = z.object({
-//   someDataPart: z.object({}),
-//   anotherDataPart: z.object({}),
-// });
-
-type MyDataPart = {
-  type: 'data';
-  data: unknown;
+type MyDataParts = {
+  data: {
+    type: "notification";
+    message: string;
+    level: "info" | "warning" | "error";
+  };
 };
 
-const tools: ToolSet = {};
+type ChatAgentUIMessage = InferAgentUIMessage<
+  (typeof import("@/lib/chat-agent"))["chatAgent"],
+  MyMetadata
+>;
+type ChatAgentUIPart = ChatAgentUIMessage["parts"][number];
+type NonDataAgentPart<PART> = PART extends { type: `data-${string}` }
+  ? never
+  : PART;
 
-type MyTools = InferUITools<typeof tools>;
-
-export type MyUIMessage = UIMessage<MyMetadata, MyDataPart, MyTools>;
+export type MyUIMessage = Omit<ChatAgentUIMessage, "parts"> & {
+  parts: Array<
+    NonDataAgentPart<ChatAgentUIPart> | DataUIPart<MyDataParts>
+  >;
+};

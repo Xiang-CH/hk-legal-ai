@@ -14,8 +14,9 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@ai-sdk/openai": "2.0.0",
-    "@ai-sdk/react": "2.0.0",
+    "@ai-sdk/azure": "4.0.76",
+    "@ai-sdk/openai": "4.0.72",
+    "@ai-sdk/react": "4.0.112",
     "@hookform/resolvers": "^5.2.2",
     "@langchain/textsplitters": "^0.1.0",
     "@langfuse/otel": "^4.6.1",
@@ -58,7 +59,7 @@
     "@radix-ui/react-toggle-group": "^1.1.11",
     "@radix-ui/react-tooltip": "^1.2.8",
     "@vercel/otel": "^2.1.2",
-    "ai": "5.0.0",
+    "ai": "7.0.109",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
