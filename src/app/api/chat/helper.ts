@@ -11,6 +11,13 @@ import {
     searchLegislationChunks,
     type PgSearchOpts,
 } from "@/lib/pg-search";
+import { applyRerank } from "@/lib/rerank";
+
+// T09: global top-N after the cross-query merge in route.ts (matches old Azure
+// top-10 / top-8 contract). RERANK_ENABLED=false (default) = fusion-order slice.
+export const RERANK_TOP_CLIC = 10;
+export const RERANK_TOP_JUDGMENT = 8;
+const RERANK_TOP_LEGISLATION = 10;
 
 
 export const azure = createOpenAI({
@@ -66,7 +73,9 @@ export type PgQueryOpts = PgSearchOpts;
 export async function* searchClic(query: string, opts: PgSearchOpts) {
     // T08: pg fusion (lex 15 + vec 15 -> RRF top-30). `score` carries rrf_score and
     // `caption` carries the ts_headline snippet so the route/UI contract is unchanged.
-    // Azure-only rerankerScore/captionHighlights are dropped at this layer (T09 rerank).
+    // T09: fusion-only (top-30). Global rerank happens once per corpus in route.ts
+    // AFTER the cross-query merge — reranking here would order per-query hits that
+    // then get merged in arrival order (and cost up to 3 calls per turn -> 429s).
     const hits = await searchClicChunks(query, opts);
     for (const h of hits) {
         yield {
@@ -114,6 +123,7 @@ export function convertLegislationResultsToXml(legislationResults: LegislationSe
 
 export async function* searchJudgmentSummary(query: string, opts: PgSearchOpts) {
     // T08: pg fusion over judgment_chunks (same contract notes as searchClic).
+    // T09: fusion-only here; global rerank in route.ts (see searchClic note).
     const hits = await searchJudgmentChunks(query, opts);
     for (const h of hits) {
         yield {
@@ -152,7 +162,12 @@ export async function* searchLegislation(query: string, opts: PgSearchOpts) {
         caps.find((c) => c.capNumber === capNumber && c.languageCode === languageCode)?.title
         ?? caps.find((c) => c.capNumber === capNumber)?.title
         ?? "";
-    for (const h of hits) {
+    // T09: rerank to final top-10 (still unwired in route.ts until T10).
+    const ranked = await applyRerank(query, hits, {
+        getText: (h) => h.content,
+        topN: RERANK_TOP_LEGISLATION,
+    });
+    for (const { item: h, rerank_score } of ranked) {
         yield {
             capNumber: h.capNumber,
             sectionNumber: h.sectionNumber,
@@ -162,9 +177,11 @@ export async function* searchLegislation(query: string, opts: PgSearchOpts) {
             content: h.content,
             url: h.url,
             score: h.rrf_score,
+            rerankerScore: rerank_score ?? undefined,
             lexical_rank: h.lexical_rank,
             vector_distance: h.vector_distance,
             rrf_score: h.rrf_score,
+            rerank_score,
             snippet: h.snippet,
         };
     }

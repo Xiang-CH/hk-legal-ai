@@ -16,6 +16,7 @@ const clicSchema = z.object({
   lexical_rank: z.number().nullable().optional(),
   vector_distance: z.number().nullable().optional(),
   rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
   snippet: z.string().optional(),
 });
 export type ClicPage = z.infer<typeof clicSchema>;
@@ -34,6 +35,7 @@ const legislationSchema = z.object({
   lexical_rank: z.number().nullable().optional(),
   vector_distance: z.number().nullable().optional(),
   rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
   snippet: z.string().optional(),
 });
 export type LegislationSection = z.infer<typeof legislationSchema>;
@@ -57,6 +59,7 @@ const judgmentSummarySchema = z.object({
   lexical_rank: z.number().nullable().optional(),
   vector_distance: z.number().nullable().optional(),
   rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
   snippet: z.string().optional(),
 });
 export type JudgmentSummary = z.infer<typeof judgmentSummarySchema>;
@@ -91,6 +94,10 @@ const metadataSchema = z.object({
     totalTokens: z.number().optional(),
     reasoningTokens: z.number().optional(),
     cachedInputTokens: z.number().optional(),
+    // T09 rerank accounting (server-computed; cost needs RERANK_COST_PER_CALL)
+    rerankCalls: z.number().optional(),
+    rerankDocuments: z.number().optional(),
+    rerankCost: z.number().optional(),
   }).optional(),
 });
 

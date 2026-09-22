@@ -125,8 +125,13 @@ const PreviewMessage = React.forwardRef<
                   <span>Reasoning Tokens: {message.metadata.usage.reasoningTokens} (${(message.metadata.usage.reasoningTokens * outputCostPerToken).toFixed(8)})</span>
                 )
               }
+              {
+                message.metadata.usage.rerankCalls != null && message.metadata.usage.rerankCalls > 0 && (
+                  <span>Rerank: {message.metadata.usage.rerankCalls} calls / {message.metadata.usage.rerankDocuments ?? 0} docs (${(message.metadata.usage.rerankCost ?? 0).toFixed(8)})</span>
+                )
+              }
               <span>Total Tokens: {message.metadata.usage.totalTokens}</span>
-              <span>Total Cost: ${(((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken) + ((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken) + ((message.metadata.usage.cachedInputTokens ?? 0) * cachedInputCostPerToken)).toFixed(8)}</span>
+              <span>Total Cost: ${(((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken) + ((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken) + ((message.metadata.usage.cachedInputTokens ?? 0) * cachedInputCostPerToken) + (message.metadata.usage.rerankCost ?? 0)).toFixed(8)}</span>
             </div>
           )}
 

@@ -10,7 +10,8 @@ import {
 	streamText,
 	convertToModelMessages,
 } from "ai";
-import { searchClic, searchJudgmentSummary } from "./helper";
+import { searchClic, searchJudgmentSummary, RERANK_TOP_CLIC, RERANK_TOP_JUDGMENT } from "./helper";
+import { applyRerank, createRerankUsage } from "@/lib/rerank";
 import { type ClicPage } from "@/lib/types";
 import {
 	observe,
@@ -24,6 +25,9 @@ import { langfuseSpanProcessor } from "@/instrumentation";
  * Remaining @azure/search-documents dep cleanup happens in T10. */
 
 /* prisma imported from @/lib/prisma (pg adapter) */
+
+/* T09: candidates per corpus entering the single global rerank call (cost + 429 bound). */
+const RERANK_CANDIDATE_CAP = 30;
 
 /**
  * Note: Prisma middlewares ($use) are not available in the current client types.
@@ -41,6 +45,11 @@ const handler = async (req: Request) => {
 	// Set session id and user id on active trace
 	const modelMessages = convertToModelMessages(messages);
 	const inputText = modelMessages[modelMessages.length - 1].content;
+	// T09: the single global rerank per corpus scores against the ORIGINAL user
+	// question, not the rewritten queries (which served retrieval breadth).
+	const rerankQuery = typeof inputText === "string"
+		? inputText
+		: inputText.filter((part) => part.type === "text").map((part) => part.text).join(" ");
 
 	// Add input and trace metadata
 	updateActiveObservation({
@@ -79,10 +88,20 @@ const handler = async (req: Request) => {
 			});
 
 			const clicResults: ClicPage[] = [];
+			// T09: merged fusion candidates (pre-rerank) — feeds legislation nid lookup
+			// so graph recall isn't narrowed to the reranked top-10.
+			const clicCandidates: ClicPage[] = [];
+			// T09: request-scoped rerank accounting -> cost summary (onFinish).
+			const rerankUsage = createRerankUsage();
 			const legislationResults: LegislationSection[] = [];
 			const judgmentResults: JudgmentSummary[] = [];
 
 			// Semantic Search (CLIC + Judgment Summary)
+			// Order: per-query fusion (lex+vec RRF top-30) -> cross-query merge/dedupe
+			// (best rrf wins) -> SINGLE rerank per corpus vs the original question ->
+			// global top-10 / top-8. Rerank must sit AFTER the merge: per-query rerank
+			// scores aren't comparable across queries and the merge was arrival-ordered,
+			// plus it fired up to 6 rerank calls/turn (the 429s). Now: 2 calls.
 			await startActiveObservation("semantic-search", async (span) => {
 				span.update({
 					input: { queries: searchQueries },
@@ -91,69 +110,111 @@ const handler = async (req: Request) => {
 				// T08: embed once per rewritten query, share across clic/judgment (/legislation in T10).
 				const queryEmbeddings = await Promise.all(searchQueries.map((q) => getEmbeddings(q)));
 
+				const judgmentCandidates: JudgmentSummary[] = [];
 				await Promise.all([
 					...searchQueries.map(async (searchQuery, qi) => {
 						await startActiveObservation("search-clic", async (clicSpan) => {
 							clicSpan.update({ input: searchQuery });
+							let count = 0;
 							for await (const result of searchClic(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								if (clicResults.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no)) continue;
-								clicResults.push(result);
-								// 3. Send message source
-								writer.write({
-									type: "source-url",
-									sourceId: `clic-${result.nid}-${result.chunk_no}`,
-									url: result.url,
-									title: result.title,
-									providerMetadata: {
-										custom: {
-											score: result.score || null,
-											caption: result.caption,
-										},
-									},
-								});
+								const existing = clicCandidates.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no);
+								if (!existing) clicCandidates.push(result);
+								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+								count++;
 							}
-							clicSpan.update({ output: { resultsCount: clicResults.length } });
+							clicSpan.update({ output: { fusionCount: count } });
 						});
 					}),
 					...searchQueries.map(async (searchQuery, qi) => {
 						await startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
 							judgmentSpan.update({ input: searchQuery });
+							let count = 0;
 							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								if (judgmentResults.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no)) continue;
-								judgmentResults.push(result);
-								writer.write({
-									type: "source-url",
-									sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
-									url: process.env.HKLII_BASEURL + result.url,
-									title: result.neutralCitation,
-									providerMetadata: {
-										custom: {
-											score: result.score || null,
-											caption: result.caption,
-											courtName: result.courtName,
-											year: result.year,
-											parties: result.parties,
-										},
-									},
-								});
+								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no);
+								if (!existing) judgmentCandidates.push(result);
+								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+								count++;
 							}
-							judgmentSpan.update({ output: { resultsCount: judgmentResults.length } });
+							judgmentSpan.update({ output: { fusionCount: count } });
 						});
 					}),
 				]);
 
+				// Global RRF order, cap rerank input, then ONE rerank per corpus.
+				const topByRrf = <T extends { rrf_score?: number | null }>(rows: T[]) =>
+					[...rows].sort((a, b) => (b.rrf_score ?? 0) - (a.rrf_score ?? 0)).slice(0, RERANK_CANDIDATE_CAP);
+
+				const [rerankedClic, rerankedJudgment] = await Promise.all([
+					startActiveObservation("rerank-clic", async (rspan) => {
+						const out = await applyRerank(rerankQuery, topByRrf(clicCandidates), {
+							getText: (h) => h.content,
+							topN: RERANK_TOP_CLIC,
+							usage: rerankUsage,
+						});
+						rspan.update({ input: rerankQuery, output: { candidates: Math.min(clicCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
+						return out;
+					}),
+					startActiveObservation("rerank-judgment", async (rspan) => {
+						const out = await applyRerank(rerankQuery, topByRrf(judgmentCandidates), {
+							getText: (h) => h.summary,
+							topN: RERANK_TOP_JUDGMENT,
+							usage: rerankUsage,
+						});
+						rspan.update({ input: rerankQuery, output: { candidates: Math.min(judgmentCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
+						return out;
+					}),
+				]);
+
+				// 3. Send message sources (deterministic order: clic, then judgment)
+				for (const { item: result, rerank_score } of rerankedClic) {
+					clicResults.push({ ...result, rerankerScore: rerank_score ?? undefined, rerank_score });
+					writer.write({
+						type: "source-url",
+						sourceId: `clic-${result.nid}-${result.chunk_no}`,
+						url: result.url,
+						title: result.title,
+						providerMetadata: {
+							custom: {
+								score: result.score || null,
+								caption: result.caption ?? "",
+								rerank_score: rerank_score ?? null,
+							},
+						},
+					});
+				}
+				for (const { item: result, rerank_score } of rerankedJudgment) {
+					judgmentResults.push({ ...result, rerankerScore: rerank_score ?? undefined, rerank_score });
+					writer.write({
+						type: "source-url",
+						sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
+						url: process.env.HKLII_BASEURL + result.url,
+						title: result.neutralCitation,
+						providerMetadata: {
+							custom: {
+								score: result.score || null,
+								caption: result.caption ?? "",
+								rerank_score: rerank_score ?? null,
+								courtName: result.courtName,
+								year: result.year,
+								parties: result.parties,
+							},
+						},
+					});
+				}
+
 				span.update({
 					output: {
+						clicCandidates: clicCandidates.length,
 						clicResultsCount: clicResults.length,
+						judgmentCandidates: judgmentCandidates.length,
 						judgmentResultsCount: judgmentResults.length,
 					},
 				});
 			});
-
 			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
 			if (searchDepth > 1) {
-				const clicNidsToSearch = clicResults.map((r) => r.nid);
+				const clicNidsToSearch = [...new Set(clicCandidates.map((r) => r.nid))];
 				// console.log("Clic NIDs to search: ", clicNidsToSearch);
 				
 				if (clicNidsToSearch.length > 0) {
@@ -342,7 +403,17 @@ const handler = async (req: Request) => {
 							output: text,
 						});
 
-						console.log("Usage: ", usage);
+						// T09: rerank cost is per API call (Cohere bills searches, not docs).
+						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
+						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
+						const fullUsage = {
+							...usage,
+							rerankCalls: rerankUsage.calls,
+							rerankDocuments: rerankUsage.documents,
+							rerankCost,
+						};
+						console.log("Usage: ", fullUsage);
+						console.log("Rerank usage: ", rerankUsage);
 						console.log("Reasoning Text: ", reasoning);
 
 						writer.write({
@@ -350,7 +421,7 @@ const handler = async (req: Request) => {
 							messageMetadata: {
 								searchQuery: searchQueries.join("\n"),
 								searchQueries: searchQueries,
-								usage: usage,
+								usage: fullUsage,
 							},
 						});
 
