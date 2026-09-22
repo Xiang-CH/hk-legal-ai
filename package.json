@@ -14,12 +14,8 @@
     "db:studio": "prisma studio"
   },
   "dependencies": {
-    "@ai-sdk/azure": "2.0.0",
     "@ai-sdk/openai": "2.0.0",
     "@ai-sdk/react": "2.0.0",
-    "@azure/arm-sql": "^10.0.0",
-    "@azure/identity": "^4.13.1",
-    "@azure/search-documents": "^12.2.0",
     "@hookform/resolvers": "^5.2.2",
     "@langchain/textsplitters": "^0.1.0",
     "@langfuse/otel": "^4.6.1",

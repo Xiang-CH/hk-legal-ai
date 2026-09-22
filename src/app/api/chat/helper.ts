@@ -1,4 +1,3 @@
-import { createAzure } from "@ai-sdk/azure";
 import { createOpenAI } from "@ai-sdk/openai";
 import { queryExtendPrompt } from "@/lib/prompts";
 import { generateObject, ModelMessage, embed } from "ai"
@@ -147,7 +146,7 @@ export async function* searchJudgmentSummary(query: string, opts: PgSearchOpts) 
     }
 }
 
-/** T08 Q3: direct legislation chunk search (pg fusion). Not wired into route.ts yet — T10. */
+/** Direct legislation chunk search (pg fusion). Chat flow keeps the clic-nid graph walk (plan §7); this feeds the T12 agent tool library. */
 export async function* searchLegislation(query: string, opts: PgSearchOpts) {
     const hits = await searchLegislationChunks(query, opts);
     // Resolve cap titles for the hit set in one query (chunks carry capNumber, not title).
@@ -162,7 +161,7 @@ export async function* searchLegislation(query: string, opts: PgSearchOpts) {
         caps.find((c) => c.capNumber === capNumber && c.languageCode === languageCode)?.title
         ?? caps.find((c) => c.capNumber === capNumber)?.title
         ?? "";
-    // T09: rerank to final top-10 (still unwired in route.ts until T10).
+    // T09: rerank to final top-10 (agent-tool path; chat flow uses the graph walk until T12).
     const ranked = await applyRerank(query, hits, {
         getText: (h) => h.content,
         topN: RERANK_TOP_LEGISLATION,

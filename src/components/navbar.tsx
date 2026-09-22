@@ -11,12 +11,10 @@ import {
   NavigationMenuList,
 } from "./ui/navigation-menu"
 import { useDevMode } from "@/hooks/use-dev-mode";
-import { useDatabaseStatus } from "@/hooks/db-status";
 
 export const Navbar = () => {
   const pathname = usePathname();
   const { isDevMode, toggleDevMode, isLoaded } = useDevMode();
-  const { status: dbStatus, isConnected } = useDatabaseStatus(20000);
 
   return (
     <NavigationMenu className="max-w-full w-full justify-between px-4 border-b gap-4 box-border">
@@ -58,18 +56,6 @@ export const Navbar = () => {
       </div>
 
       <div className="hidden md:flex items-center space-x-2">
-        <div className="flex flex-col items-center justify-between px-2 bg-background  border-border border-1 rounded-lg">
-          {dbStatus && (
-            <div className="text-sm text-muted-foreground mb-1">
-              DB Status: {dbStatus || "Unknown"}
-            </div>
-          )}
-          {isConnected ? (
-            <div className="text-sm text-green-500">Database is connected</div>
-          ) : (
-            <div className="text-sm text-red-500">Database is not connected</div>
-          )}
-        </div>
         <Label htmlFor="dev-mode" className="text-sm">Dev Mode</Label>
         {isLoaded && (
           <Switch
