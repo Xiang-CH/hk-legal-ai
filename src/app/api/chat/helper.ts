@@ -3,8 +3,14 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { queryExtendPrompt } from "@/lib/prompts";
 import { generateObject, ModelMessage, embed } from "ai"
 import { z } from 'zod';
-import { searchClicClientType, searchJudgmentSummaryClientType } from "./route";
 import { ClicPage, LegislationSection, JudgmentSummary } from "@/lib/types";
+import { prisma } from "@/lib/prisma";
+import {
+    searchClicChunks,
+    searchJudgmentChunks,
+    searchLegislationChunks,
+    type PgSearchOpts,
+} from "@/lib/pg-search";
 
 
 export const azure = createOpenAI({
@@ -55,57 +61,30 @@ export async function getEmbeddings(text: string) {
 }
 
 
-export async function* searchClic(query: string, searchClicClient: searchClicClientType) {
-    const searchResults = await searchClicClient.search(
-        query,
-        {
-            top: 10,
-            queryType: "semantic",
-            searchMode: "all",
-            select: ["nid", "title", "content", "url", "topic", "chunk_no"],
-            semanticSearchOptions: {
-                configurationName: "clic-semantic-config",
-                captions: {
-                    captionType: "extractive"
-                },
-            },
-            
-            vectorSearchOptions: {
-                queries: [
-                    // {
-                    //     kind: "text",
-                    //     text: query,
-                    //     fields: ["embedding"],
-                    // }
-                    {
-                        kind: "vector",
-                        vector: await getEmbeddings(query),
-                        fields: ["embedding"],
-                    }
-                ],
-            },
-        }
-    );
+export type PgQueryOpts = PgSearchOpts;
 
-    // const queryResults = [];
-    for await (const result of searchResults.results) {
-        const document = result.document as {
-            nid: number;
-            title: string;
-            content: string;
-            url: string;
-            topic: string;
-            chunk_no: number;
-        };
+export async function* searchClic(query: string, opts: PgSearchOpts) {
+    // T08: pg fusion (lex 15 + vec 15 -> RRF top-30). `score` carries rrf_score and
+    // `caption` carries the ts_headline snippet so the route/UI contract is unchanged.
+    // Azure-only rerankerScore/captionHighlights are dropped at this layer (T09 rerank).
+    const hits = await searchClicChunks(query, opts);
+    for (const h of hits) {
         yield {
-            ...document,
-            score: result.score,
-            rerankerScore: result.rerankerScore,
-            caption: result.captions?.[0]?.text || "",
-            captionHighlights: result.captions?.[0]?.highlights || ""
-        }
+            nid: h.nid,
+            title: h.title,
+            content: h.content,
+            url: h.url,
+            topic: h.topic,
+            chunk_no: h.chunk_no,
+            score: h.rrf_score,
+            caption: h.snippet,
+            lexical_rank: h.lexical_rank,
+            vector_distance: h.vector_distance,
+            rrf_score: h.rrf_score,
+            snippet: h.snippet,
+        };
     }
-} 
+}
 
 
 export function convertClicResultsToXml(clicResults: ClicPage[]) {
@@ -133,57 +112,61 @@ export function convertLegislationResultsToXml(legislationResults: LegislationSe
 }
 
 
-export async function* searchJudgmentSummary(query: string, searchClient: searchJudgmentSummaryClientType) {
-    const searchResults = await searchClient.search(
-        query,
-        {
-            top: 8,
-            queryType: "full",
-            searchMode: "all",
-            select: ["judgmentId", "chunk_no", "neutralCitation", "courtName", "year", "date", "parties", "summary", "summarySource", "url"],
-            // semanticSearchOptions: {
-            //     configurationName: "judgment-summary-semantic-config",
-            //     captions: {
-            //         captionType: "extractive"
-            //     },
-            // },
-            vectorSearchOptions: {
-                queries: [
-                    // {
-                    //     kind: "text",
-                    //     text: query,
-                    //     fields: ["embedding"],
-                    // }
-                    {
-                        kind: "vector",
-                        vector: await getEmbeddings(query),
-                        fields: ["embedding"],
-                    }
-                ],
-            },
-        }
-    );
-
-    for await (const result of searchResults.results) {
-        const document = result.document as {
-            judgmentId: number;
-            chunk_no: number;
-            neutralCitation: string;
-            courtName: string;
-            year: number;
-            date: string;
-            parties: string | null;
-            summary: string;
-            summarySource: string | null;
-            url: string;
-        };
+export async function* searchJudgmentSummary(query: string, opts: PgSearchOpts) {
+    // T08: pg fusion over judgment_chunks (same contract notes as searchClic).
+    const hits = await searchJudgmentChunks(query, opts);
+    for (const h of hits) {
         yield {
-            ...document,
-            score: result.score,
-            rerankerScore: result.rerankerScore,
-            caption: result.captions?.[0]?.text || "",
-            captionHighlights: result.captions?.[0]?.highlights || ""
-        }
+            judgmentId: h.judgmentId,
+            chunk_no: h.chunk_no,
+            neutralCitation: h.neutralCitation ?? "",
+            courtName: h.courtName ?? "",
+            year: h.year ?? 0,
+            date: h.date instanceof Date ? h.date.toISOString() : (h.date ?? ""),
+            parties: h.parties,
+            summary: h.content,
+            summarySource: h.summarySource,
+            url: h.url ?? "",
+            score: h.rrf_score,
+            caption: h.snippet,
+            lexical_rank: h.lexical_rank,
+            vector_distance: h.vector_distance,
+            rrf_score: h.rrf_score,
+            snippet: h.snippet,
+        };
+    }
+}
+
+/** T08 Q3: direct legislation chunk search (pg fusion). Not wired into route.ts yet — T10. */
+export async function* searchLegislation(query: string, opts: PgSearchOpts) {
+    const hits = await searchLegislationChunks(query, opts);
+    // Resolve cap titles for the hit set in one query (chunks carry capNumber, not title).
+    const capNumbers = [...new Set(hits.map((h) => h.capNumber))];
+    const caps = capNumbers.length
+        ? await prisma.legislationCap.findMany({
+            where: { capNumber: { in: capNumbers } },
+            select: { capNumber: true, languageCode: true, title: true },
+        })
+        : [];
+    const titleOf = (capNumber: string, languageCode: string) =>
+        caps.find((c) => c.capNumber === capNumber && c.languageCode === languageCode)?.title
+        ?? caps.find((c) => c.capNumber === capNumber)?.title
+        ?? "";
+    for (const h of hits) {
+        yield {
+            capNumber: h.capNumber,
+            sectionNumber: h.sectionNumber,
+            subsectionNumber: h.subsectionNumber ?? undefined,
+            capTitle: titleOf(h.capNumber, h.languageCode),
+            sectionHeading: h.heading ?? "",
+            content: h.content,
+            url: h.url,
+            score: h.rrf_score,
+            lexical_rank: h.lexical_rank,
+            vector_distance: h.vector_distance,
+            rrf_score: h.rrf_score,
+            snippet: h.snippet,
+        };
     }
 }
 

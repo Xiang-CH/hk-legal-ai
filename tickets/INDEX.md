@@ -11,7 +11,7 @@ Order: T01 → T02 → T03 → T04 → T05 → T06 → T07 → T08 → T09 → T
 | [x] | T05 | Re-chunk pipeline (index lost) | T06 |
 | [x] | T06 | Re-embed (app batch or in-DB create_embeddings, EN cache) | T07 |
 | [x] | T07 | COPY + HNSW/GIN/tsv build | T08 |
-| [ ] | T08 | Fusion search SQL (RRF, snippets, in-DB embeddings) | T09, T10 |
+| [x] | T08 | Fusion search SQL (RRF, snippets, in-DB embeddings) | T09, T10 |
 | [ ] | T09 | Rerank: azure_ai.rank primary + app fallback + flag | T10 |
 | [ ] | T10 | Runtime rewrite + deletion | T11 |
 | [ ] | T11 | UI contract + cutover + swap | — |

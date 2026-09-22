@@ -12,6 +12,11 @@ const clicSchema = z.object({
   score: z.number().optional(),
   caption: z.string().optional(),
   captionHighlights: z.string().optional(),
+  // T08 pg fusion extras (score carries rrf_score, caption carries snippet)
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  snippet: z.string().optional(),
 });
 export type ClicPage = z.infer<typeof clicSchema>;
 
@@ -25,6 +30,11 @@ const legislationSchema = z.object({
   url: z.string(),
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
+  // T08 pg fusion extras
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  snippet: z.string().optional(),
 });
 export type LegislationSection = z.infer<typeof legislationSchema>;
 
@@ -43,6 +53,11 @@ const judgmentSummarySchema = z.object({
   score: z.number().optional(),
   caption: z.string().optional(),
   captionHighlights: z.string().optional(),
+  // T08 pg fusion extras (score carries rrf_score, caption carries snippet)
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  snippet: z.string().optional(),
 });
 export type JudgmentSummary = z.infer<typeof judgmentSummarySchema>;
 

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 
 import { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { azure } from "./helper";
-import { rewriteQuery, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
+import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { searchPrompt, sourcePrompt } from "@/lib/prompts";
 import {
 	createUIMessageStream,
@@ -10,10 +10,6 @@ import {
 	streamText,
 	convertToModelMessages,
 } from "ai";
-import {
-	SearchClient,
-	AzureKeyCredential,
-} from "@azure/search-documents";
 import { searchClic, searchJudgmentSummary } from "./helper";
 import { type ClicPage } from "@/lib/types";
 import {
@@ -24,21 +20,8 @@ import {
 } from "@langfuse/tracing";
 import { langfuseSpanProcessor } from "@/instrumentation";
 
-if (!process.env.AZURE_SEARCH_ENDPOINT) {
-	throw new Error("AZURE_SEARCH_ENDPOINT is not defined");
-}
-
-if (!process.env.CLIC_INDEX_NAME) {
-	throw new Error("CLIC_INDEX_NAME is not defined");
-}
-
-if (!process.env.JUDGMENT_SUMMARY_INDEX_NAME) {
-	throw new Error("JUDGMENT_SUMMARY_INDEX_NAME is not defined");
-}
-
-if (!process.env.AZURE_SEARCH_KEY) {
-	throw new Error("AZURE_SEARCH_KEY is not defined");
-}
+/* T08: Azure AI Search clients removed — pg fusion (helper.ts) is the search backend.
+ * Remaining @azure/search-documents dep cleanup happens in T10. */
 
 /* prisma imported from @/lib/prisma (pg adapter) */
 
@@ -46,21 +29,6 @@ if (!process.env.AZURE_SEARCH_KEY) {
  * Note: Prisma middlewares ($use) are not available in the current client types.
  * We handle timeouts per-query instead of using prisma.$use middleware.
  */
-
-const searchClicClient = new SearchClient(
-	process.env.AZURE_SEARCH_ENDPOINT,
-	process.env.CLIC_INDEX_NAME,
-	new AzureKeyCredential(process.env.AZURE_SEARCH_KEY)
-);
-
-const searchJudgmentSummaryClient = new SearchClient(
-	process.env.AZURE_SEARCH_ENDPOINT,
-	process.env.JUDGMENT_SUMMARY_INDEX_NAME,
-	new AzureKeyCredential(process.env.AZURE_SEARCH_KEY)
-);
-
-export type searchClicClientType = typeof searchClicClient
-export type searchJudgmentSummaryClientType = typeof searchJudgmentSummaryClient
 
 const handler = async (req: Request) => {
 	let { messages, searchDepth } = await req.json();
@@ -120,11 +88,14 @@ const handler = async (req: Request) => {
 					input: { queries: searchQueries },
 				});
 
+				// T08: embed once per rewritten query, share across clic/judgment (/legislation in T10).
+				const queryEmbeddings = await Promise.all(searchQueries.map((q) => getEmbeddings(q)));
+
 				await Promise.all([
-					...searchQueries.map(async (searchQuery) => {
+					...searchQueries.map(async (searchQuery, qi) => {
 						await startActiveObservation("search-clic", async (clicSpan) => {
 							clicSpan.update({ input: searchQuery });
-							for await (const result of searchClic(searchQuery, searchClicClient)) {
+							for await (const result of searchClic(searchQuery, { embedding: queryEmbeddings[qi] })) {
 								if (clicResults.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no)) continue;
 								clicResults.push(result);
 								// 3. Send message source
@@ -136,9 +107,7 @@ const handler = async (req: Request) => {
 									providerMetadata: {
 										custom: {
 											score: result.score || null,
-											rerankerScore: result.rerankerScore || null,
 											caption: result.caption,
-											captionHighlights: result.captionHighlights,
 										},
 									},
 								});
@@ -146,10 +115,10 @@ const handler = async (req: Request) => {
 							clicSpan.update({ output: { resultsCount: clicResults.length } });
 						});
 					}),
-					...searchQueries.map(async (searchQuery) => {
+					...searchQueries.map(async (searchQuery, qi) => {
 						await startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
 							judgmentSpan.update({ input: searchQuery });
-							for await (const result of searchJudgmentSummary(searchQuery, searchJudgmentSummaryClient)) {
+							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] })) {
 								if (judgmentResults.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no)) continue;
 								judgmentResults.push(result);
 								writer.write({
@@ -160,9 +129,7 @@ const handler = async (req: Request) => {
 									providerMetadata: {
 										custom: {
 											score: result.score || null,
-											rerankerScore: result.rerankerScore || null,
 											caption: result.caption,
-											captionHighlights: result.captionHighlights,
 											courtName: result.courtName,
 											year: result.year,
 											parties: result.parties,
