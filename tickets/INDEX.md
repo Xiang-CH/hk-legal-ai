@@ -14,8 +14,8 @@ Order: T01 → T02 → T03 → T04 → T05 → T06 → T07 → T08 → T09 → T
 | [x] | T08 | Fusion search SQL (RRF, snippets, app-side embeddings) | T09, T10 |
 | [x] | T09 | Rerank: app-side Cohere (global, flagged) + cost | T10 |
 | [x] | T10 | Runtime rewrite + deletion | T11 |
-| [ ] | T11 | UI contract + cutover + swap | — |
-| [ ] | T12 | Agent tool library (pg search tools) | T13, T14 |
+| [x] | T11 | UI contract + cutover + swap | — |
+| [x] | T12 | Agent tool library (pg search tools) | T13, T14 |
 | [ ] | T13 | Agent loop in chat route + prompt rewrite | T14, T15 |
 | [ ] | T14 | Streaming sources + UI for tool states | T15 |
 | [ ] | T15 | Agentic rollout: flags, smoke, kill-switch | — |
