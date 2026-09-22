@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
 import { createChatAgent, createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
-import { createAgenticChatResponse } from "@/lib/agent-stream";
+import { createAgenticChatResponse, type TraceCompletion } from "@/lib/agent-stream";
 import { searchTools } from "@/lib/search-tools";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { sourcePrompt } from "@/lib/prompts";
@@ -19,9 +19,7 @@ import { searchClic, searchJudgmentSummary, RERANK_TOP_CLIC, RERANK_TOP_JUDGMENT
 import { applyRerank, createRerankUsage } from "@/lib/rerank";
 import { type ClicPage } from "@/lib/types";
 import {
-	observe,
-	updateActiveObservation,
-	updateActiveTrace,
+	propagateAttributes,
 	startActiveObservation,
 } from "@langfuse/tracing";
 import { langfuseSpanProcessor } from "@/instrumentation";
@@ -31,10 +29,14 @@ import { langfuseSpanProcessor } from "@/instrumentation";
 /* T09: candidates per corpus entering the single global rerank call (cost + 429 bound). */
 const RERANK_CANDIDATE_CAP = 30;
 
+const correlationIdSchema = z.string().trim().min(1).max(200);
+
 const chatRequestSchema = z.object({
 	messages: z.array(z.unknown()),
 	maxSteps: z.number().int().min(1).optional(),
 	searchDepth: z.number().int().min(1).optional(),
+	sessionId: correlationIdSchema.optional(),
+	userId: correlationIdSchema.optional(),
 });
 
 type ChatRequest = z.infer<typeof chatRequestSchema>;
@@ -67,8 +69,12 @@ function resolveMaxSteps(requested: number | undefined): number {
  * We handle timeouts per-query instead of using prisma.$use middleware.
  */
 
-async function handleLegacyChat(messages: MyUIMessage[], searchDepth: number) {
-	// Set session id and user id on active trace
+async function handleLegacyChat(
+	messages: MyUIMessage[],
+	searchDepth: number,
+	onTraceComplete: TraceCompletion,
+) {
+	// Build the model input and the retrieval query from the latest user message.
 	const modelMessages = await convertToModelMessages(messages);
 	const inputText = modelMessages[modelMessages.length - 1].content;
 	// T09: the single global rerank per corpus scores against the ORIGINAL user
@@ -76,16 +82,6 @@ async function handleLegacyChat(messages: MyUIMessage[], searchDepth: number) {
 	const rerankQuery = typeof inputText === "string"
 		? inputText
 		: inputText.filter((part) => part.type === "text").map((part) => part.text).join(" ");
-
-	// Add input and trace metadata
-	updateActiveObservation({
-		input: inputText,
-	});
-
-	updateActiveTrace({
-		name: "chat-message",
-		input: inputText,
-	});
 
 	const searchQueries = await startActiveObservation("rewrite-query", async (span) => {
 		span.update({ input: inputText });
@@ -405,14 +401,7 @@ async function handleLegacyChat(messages: MyUIMessage[], searchDepth: number) {
 			const result = await createLegacyChatAgent().stream({
 				prompt: modelMessages,
 				onEnd({ usage, text, reasoningText }) {
-						// Update trace with final output after stream completes
-						updateActiveObservation({
-							output: text,
-						});
-
-						updateActiveTrace({
-							output: text,
-						});
+						onTraceComplete({ output: text });
 
 						// T09: rerank cost is per API call (Cohere bills searches, not docs).
 						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
@@ -457,20 +446,13 @@ async function handleLegacyChat(messages: MyUIMessage[], searchDepth: number) {
 				stream: result.stream,
 				sendReasoning: true,
 				onError: (error) => {
-						updateActiveObservation({
-							output: error,
-							level: "ERROR"
-						});
-
-						updateActiveTrace({
-							output: error,
-						});
-
+						onTraceComplete({ output: "", error });
 						return "An error occurred.";
 					},
 				}));
 		},
 		onEnd: async () => {
+			onTraceComplete({ output: "" });
 			// Critical for serverless: flush traces after the response stream closes.
 			await langfuseSpanProcessor.forceFlush();
 		},
@@ -505,26 +487,64 @@ async function handleChatRequest(req: Request): Promise<Response> {
 
 	const modelMessages = await convertToModelMessages(validated.data);
 	const inputText = modelMessages[modelMessages.length - 1]?.content ?? "";
-	updateActiveObservation({ input: inputText });
-	updateActiveTrace({ name: "chat-message", input: inputText });
-
 	const maxSteps = resolveMaxSteps(request.maxSteps);
-	if (process.env.AGENTIC_SEARCH_ENABLED === "true") {
-		return createAgenticChatResponse({
-			agent: createChatAgent(maxSteps),
-			messages: validated.data,
-			maxSteps,
-			abortSignal: req.signal,
-		});
-	}
+	const searchDepth = request.searchDepth ?? 2;
+	const searchMode = process.env.AGENTIC_SEARCH_ENABLED === "true" ? "agent" : "legacy";
 
-	return handleLegacyChat(validated.data, request.searchDepth ?? 2);
+	return propagateAttributes(
+		{
+			traceName: "chat-message",
+			userId: request.userId,
+			sessionId: request.sessionId,
+			tags: ["clic-chat", searchMode],
+			metadata: {
+				searchMode,
+				maxSteps: String(maxSteps),
+				searchDepth: String(searchDepth),
+			},
+		},
+		async () =>
+			startActiveObservation(
+				"chat-message",
+				async (rootObservation) => {
+					rootObservation.update({ input: inputText });
+					let completed = false;
+					const completeTrace: TraceCompletion = ({ output, error }) => {
+						if (completed) return;
+						completed = true;
+						if (error === undefined) {
+							rootObservation.update({ output });
+						} else {
+							rootObservation.update({
+								output,
+								level: "ERROR",
+								statusMessage: error instanceof Error ? error.message : String(error),
+							});
+						}
+						rootObservation.end();
+					};
+
+					try {
+						if (searchMode === "agent") {
+							return await createAgenticChatResponse({
+								agent: createChatAgent(maxSteps),
+								messages: validated.data,
+								maxSteps,
+								abortSignal: req.signal,
+								onTraceComplete: completeTrace,
+							});
+						}
+
+						return await handleLegacyChat(validated.data, searchDepth, completeTrace);
+					} catch (error) {
+						completeTrace({ output: "", error });
+						await langfuseSpanProcessor.forceFlush();
+						throw error;
+					}
+				},
+				{ asType: "agent", endOnExit: false },
+			),
+	);
 }
 
-// Wrap handler with observe() to create a Langfuse trace
-export const POST = observe(handleChatRequest, {
-	name: "handle-chat-message",
-	captureInput: true,
-    captureOutput: true,
-	endOnExit: false, // Don't end observation until stream finishes
-});
+export const POST = handleChatRequest;

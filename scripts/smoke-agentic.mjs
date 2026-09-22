@@ -270,6 +270,8 @@ async function runCase(testCase) {
       messages: testCase.messages,
       maxSteps: MAX_STEPS,
       searchDepth: 2,
+      sessionId: `smoke-${EXPECTED_MODE}-${testCase.name}`,
+      userId: `smoke-${EXPECTED_MODE}`,
     }),
     signal: AbortSignal.timeout(120_000),
   });

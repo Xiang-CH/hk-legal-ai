@@ -272,28 +272,20 @@ function summarizeForSpan(value: unknown): unknown {
 }
 
 /**
- * Run `fn` inside a `tool:<name>` Langfuse span. Degrades gracefully when called
- * outside an active trace (e.g. unit smoke tests) — work still runs, span is skipped.
+ * Run `fn` inside a `tool:<name>` Langfuse observation. The OpenTelemetry no-op
+ * tracer keeps unit smoke tests working without a registered provider.
  */
 async function withToolSpan<T>(name: string, input: unknown, fn: () => Promise<T>): Promise<T> {
-	try {
-		return await startActiveObservation(name, async (span) => {
-			try {
-				span.update({ input: summarizeForSpan(input) });
-			} catch {
-				/* best-effort */
-			}
+	return startActiveObservation(
+		name,
+		async (span) => {
+			span.update({ input: summarizeForSpan(input) });
 			const out = await fn();
-			try {
-				span.update({ output: summarizeForSpan(out) });
-			} catch {
-				/* best-effort */
-			}
+			span.update({ output: summarizeForSpan(out) });
 			return out;
-		});
-	} catch {
-		return fn();
-	}
+		},
+		{ asType: "tool" },
+	);
 }
 
 /**

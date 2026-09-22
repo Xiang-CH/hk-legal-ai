@@ -16,6 +16,7 @@ import type { MyMetadata, MyUIMessage } from "@/lib/types";
 import { z } from "zod";
 
 type ChatChunk = InferUIMessageChunk<MyUIMessage>;
+export type TraceCompletion = (result: { output: string; error?: unknown }) => void;
 type AgentTextChunk = TextStreamPart<typeof searchTools>;
 type SourceChunk = Extract<ChatChunk, { type: "source-url" }>;
 type SearchToolName =
@@ -232,15 +233,19 @@ export async function createAgenticChatResponse({
   messages,
   maxSteps,
   abortSignal,
+  onTraceComplete,
 }: {
   agent: ChatAgent;
   messages: MyUIMessage[];
   maxSteps: number;
   abortSignal?: AbortSignal;
+  onTraceComplete: TraceCompletion;
 }): Promise<Response> {
   let usage = emptyUsage();
   let stepCount = 0;
   let metadataSent = false;
+  let outputText = "";
+  let streamError: unknown;
   const toolNamesByCallId = new Map<string, SearchToolName>();
   const emittedSourceIds = new Set<string>();
 
@@ -255,6 +260,12 @@ export async function createAgenticChatResponse({
       transform(chunk, controller) {
         if (chunk.type === "start-step") {
           stepCount += 1;
+        }
+        if (chunk.type === "text-delta") {
+          outputText += chunk.text;
+        }
+        if (chunk.type === "error") {
+          streamError = chunk.error;
         }
         if (chunk.type === "finish") {
           usage = chunk.totalUsage;
@@ -325,6 +336,10 @@ export async function createAgenticChatResponse({
             }),
           });
         }
+        onTraceComplete({
+          output: outputText,
+          ...(streamError === undefined ? {} : { error: streamError }),
+        });
         await langfuseSpanProcessor.forceFlush();
       },
     }),

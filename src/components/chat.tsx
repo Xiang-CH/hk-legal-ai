@@ -15,6 +15,7 @@ import { Slider } from "@/components/ui/slider"
 
 export function Chat() {
   const chatId = "001";
+  const [sessionId] = useState(() => crypto.randomUUID());
 
   const [input, setInput] = useState('');
   const [maxSteps, setMaxSteps] = useState(5);
@@ -26,7 +27,7 @@ export function Chat() {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
-    sendMessage({ text: input });
+    sendMessage({ text: input }, { body: { maxSteps, sessionId } });
     setInput('');
 
   };
@@ -178,7 +179,7 @@ export function Chat() {
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) => sendMessage({ text: message }, { body: { maxSteps } })}
+            sendMessage={(message) => sendMessage({ text: message }, { body: { maxSteps, sessionId } })}
           />
         </form>
       </div>
