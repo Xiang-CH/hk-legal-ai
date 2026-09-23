@@ -57,9 +57,11 @@ export function useConversations() {
       updatedAt: now,
     };
     setConversations((prev) => {
-      const next = [meta, ...prev].slice(0, MAX_CONVERSATIONS);
+      const next = [meta, ...prev];
+      // Pass the uncapped list so saveConversationList can purge the
+      // message/draft keys of conversations that fall beyond the cap.
       saveConversationList(next);
-      return next;
+      return next.slice(0, MAX_CONVERSATIONS);
     });
     setActiveId(id);
     saveActiveId(id);
