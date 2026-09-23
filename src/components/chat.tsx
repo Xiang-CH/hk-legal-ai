@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GroundingsDisplay } from "./groundings-display";
+import { ScrollArea } from "./ui/scroll-area";
 import { MyUIMessage } from "@/lib/types";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
@@ -164,39 +165,39 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
       )}
 
 
-      <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-y-auto", "max-w-3xl")}>
-        <div
-          ref={messagesContainerRef}
-          className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-auto pt-4 pb-36"
+      <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-hidden", "max-w-3xl")}>
+        <ScrollArea
+          viewportRef={messagesContainerRef}
+          className="min-w-0 min-h-0 flex-1"
         >
-          {messages.length === 0 && <Overview />}
+          <div className="flex min-w-0 flex-col gap-6 pt-4 pb-36">
+            {messages.length === 0 && <Overview />}
 
-          {messages.map((message) => (
-            <PreviewMessage
-              key={message.id}
-              message={message}
-              onAnswerQuestion={(toolCallId, output) =>
-                addToolResult({ tool: "ask_question", toolCallId, output })
-              }
-              // groundings={messages[messages.length - 1]?.metadata?.groundings}
-              ref={(node: HTMLElement | null) => {
-                if (node) {
-                  messageRefs.current.set(message.id, node);
-                } else {
-                  messageRefs.current.delete(message.id);
+            {messages.map((message) => (
+              <PreviewMessage
+                key={message.id}
+                message={message}
+                onAnswerQuestion={(toolCallId, output) =>
+                  addToolResult({ tool: "ask_question", toolCallId, output })
                 }
-              }}
-            />
-          ))}
+                // groundings={messages[messages.length - 1]?.metadata?.groundings}
+                ref={(node: HTMLElement | null) => {
+                  if (node) {
+                    messageRefs.current.set(message.id, node);
+                  } else {
+                    messageRefs.current.delete(message.id);
+                  }
+                }}
+              />
+            ))}
 
-          {(status === "submitted" || (status === "streaming" &&
-            lastAssistantMessage &&
-            !lastAssistantHasVisibleContent)) && (
-            <ThinkingMessage query={lastMessage?.metadata?.searchQuery} />
-          )}
-
-
-        </div>
+            {(status === "submitted" || (status === "streaming" &&
+              lastAssistantMessage &&
+              !lastAssistantHasVisibleContent)) && (
+              <ThinkingMessage query={lastMessage?.metadata?.searchQuery} />
+            )}
+          </div>
+        </ScrollArea>
 
         <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full max-w-3xl">
           <MultimodalInput
