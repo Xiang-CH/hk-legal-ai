@@ -47,6 +47,7 @@ const suggestedActionsConsult = [
 
 export function MultimodalInput({
   chatId,
+  draftId,
   input,
   setInput,
   isLoading,
@@ -58,6 +59,7 @@ export function MultimodalInput({
   className,
 }: {
   chatId: string;
+  draftId?: string;
   input: string;
   setInput: (value: string) => void;
   isLoading: boolean;
@@ -89,10 +91,13 @@ export function MultimodalInput({
     }
   };
 
+  // Drafts are namespaced per conversation so switching chats restores each draft.
+  const storageKey = draftId ? `clic-chat:draft:${draftId}` : "input";
   const [localStorageInput, setLocalStorageInput] = useLocalStorage(
-    "input",
+    storageKey,
     "",
   );
+  const activeDraftKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -102,9 +107,28 @@ export function MultimodalInput({
       setInput(finalValue);
       adjustHeight();
     }
+    activeDraftKey.current = storageKey;
     // Only run once after hydration
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // When the active conversation changes, load its draft. Read straight from
+  // the browser store: the useLocalStorage state still holds the previous
+  // key's value during this commit, so it would load a stale draft.
+  useEffect(() => {
+    if (activeDraftKey.current === storageKey) return;
+    activeDraftKey.current = storageKey;
+    let draft = "";
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) draft = (JSON.parse(raw) as string) || "";
+    } catch {
+      draft = "";
+    }
+    setInput(draft);
+    adjustHeight();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
 
   useEffect(() => {
     setLocalStorageInput(input);
