@@ -2,7 +2,9 @@
 
 import { motion } from "framer-motion";
 
+import { ChevronDownIcon } from "lucide-react";
 import { SparklesIcon } from "./icons";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Markdown } from "./markdown";
 import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
@@ -36,6 +38,53 @@ function isChatToolPart(part: MessagePart): part is ChatToolPart {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function toolInput(part: ChatToolPart): Record<string, unknown> | null {
+  if (!("input" in part)) return null;
+  const input: unknown = (part as { input?: unknown }).input;
+  return isRecord(input) ? input : null;
+}
+
+function stringField(input: Record<string, unknown> | null, key: string): string | null {
+  if (!input) return null;
+  const value = input[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+/** Human-readable search keywords / identifiers for the tool call. */
+function toolInputSummary(part: ChatToolPart): string | null {
+  const input = toolInput(part);
+  if (!input) return null;
+  switch (part.type) {
+    case "tool-search_clic":
+    case "tool-search_judgments": {
+      const query = stringField(input, "query");
+      const topic = stringField(input, "topic");
+      if (query && topic) return `${query} · ${topic}`;
+      return query;
+    }
+    case "tool-search_legislation": {
+      const bits: string[] = [];
+      const keywords = stringField(input, "keywords");
+      const cap = stringField(input, "capNumber");
+      const section = stringField(input, "sectionNumber");
+      if (keywords) bits.push(keywords);
+      if (cap || section) bits.push(`Cap ${cap ?? "?"} s.${section ?? "?"}`);
+      return bits.length > 0 ? bits.join(" · ") : null;
+    }
+    case "tool-get_ordinance_section": {
+      const cap = stringField(input, "cap_no");
+      const section = stringField(input, "section_no");
+      if (cap || section) return `Cap ${cap ?? "?"} s.${section ?? "?"}`;
+      return null;
+    }
+    case "tool-get_case": {
+      return stringField(input, "action_no") ?? stringField(input, "case_name");
+    }
+    default:
+      return null;
+  }
 }
 
 function toolResultCount(part: ChatToolPart): number | null {
@@ -87,6 +136,7 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
 
 function ToolProgress({ part }: { part: ChatToolPart }) {
   const state = toolState(part);
+  const keywords = toolInputSummary(part);
   return (
     <div
       className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm"
@@ -94,6 +144,11 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
     >
       <div className="min-w-0">
         <div className="font-medium">{toolLabels[part.type]}</div>
+        {keywords && (
+          <div className="line-clamp-2 break-words text-muted-foreground" title={keywords}>
+            &ldquo;{keywords}&rdquo;
+          </div>
+        )}
         <div className={state.failed ? "text-destructive" : "text-muted-foreground"}>
           {state.label}
         </div>
@@ -107,6 +162,31 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
         />
       )}
     </div>
+  );
+}
+
+function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boolean }) {
+  // Collapsed by default; stay open while streaming so live thinking is visible.
+  const [expanded, setExpanded] = React.useState(false);
+  const open = isStreaming ? true : expanded;
+  return (
+    <Collapsible
+      open={open}
+      onOpenChange={setExpanded}
+      className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
+    >
+      <CollapsibleTrigger className="flex w-full items-center gap-2 text-left">
+        <ChevronDownIcon
+          className={`size-4 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
+          {isStreaming ? "Thinking" : "Reasoning"}
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="pt-2">
+        <Markdown>{text}</Markdown>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -170,7 +250,7 @@ const PreviewMessage = React.forwardRef<
           </div>
         )}
 
-        <div className="flex flex-col gap-2 w-full">
+        <div className="flex min-w-0 flex-col gap-2 w-full">
           {message.role === "user" && textContent && (
             <div className="flex flex-col gap-4">
               <Markdown>{textContent}</Markdown>
@@ -184,18 +264,12 @@ const PreviewMessage = React.forwardRef<
               }
 
               if (part.type === "reasoning" && part.text.trim().length > 0) {
-                const isStreaming = part.state === "streaming";
-
                 return (
-                  <div
+                  <ReasoningCard
                     key={`${part.type}-${index}`}
-                    className="rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm text-muted-foreground"
-                  >
-                    <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/80">
-                      {isStreaming ? "Thinking" : "Reasoning summary"}
-                    </div>
-                    <Markdown>{part.text}</Markdown>
-                  </div>
+                    text={part.text}
+                    isStreaming={part.state === "streaming"}
+                  />
                 );
               }
 
