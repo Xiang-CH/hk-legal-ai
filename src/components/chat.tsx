@@ -6,18 +6,23 @@ import { Overview } from "@/components/overview";
 import { useScroll } from "@/hooks/use-scroll-to-bottom";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import { useChat } from '@ai-sdk/react'
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { GroundingsDisplay } from "./groundings-display";
+import { ScrollArea } from "./ui/scroll-area";
 import { MyUIMessage } from "@/lib/types";
 import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch";
 
-export function Chat() {
+export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnabled: boolean }) {
   const chatId = "001";
+  const [sessionId] = useState(() => crypto.randomUUID());
 
   const [input, setInput] = useState('');
-  const [searchDepth, setSearchDepth] = useState(2);
+  const [maxSteps, setMaxSteps] = useState(5);
+  const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -26,7 +31,10 @@ export function Chat() {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
-    sendMessage({ text: input });
+    sendMessage(
+      { text: input },
+      { body: { maxSteps, sessionId, agenticSearchEnabled } },
+    );
     setInput('');
 
   };
@@ -35,10 +43,13 @@ export function Chat() {
     messages,
     setMessages,
     sendMessage,
+    addToolResult,
     status,
     stop
   } = useChat<MyUIMessage>({
-    experimental_throttle: 50,
+    throttle: 50,
+    // Resumes the agent after the user answers an ask_question tool call.
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onError: (error) => {
       if (error.message.includes("Too many requests")) {
         toast.error(
@@ -48,9 +59,6 @@ export function Chat() {
         toast.error(`Error: ${error.message}`);
       }
     },
-    onFinish: (data) => {
-      console.log(data);
-    }
   });
 
   const [messagesContainerRef, scrollToElement] =
@@ -63,7 +71,13 @@ export function Chat() {
       return part.text.trim().length > 0;
     }
 
-    return false;
+    return part.type === "tool-search_clic" ||
+      part.type === "tool-search_judgments" ||
+      part.type === "tool-search_legislation" ||
+      part.type === "tool-get_ordinance_section" ||
+      part.type === "tool-get_case" ||
+      part.type === "tool-full_search" ||
+      part.type === "tool-ask_question";
   }) ?? false;
 
   useEffect(() => {
@@ -92,21 +106,47 @@ export function Chat() {
 
           <div className="mb-4">
             <h3 className="font-semibold mb-2">Settings</h3>
+            <div className="mb-3 ml-2 flex items-center justify-between gap-4">
+              <label className="text-xs" htmlFor="agentic-search-enabled">
+                Agentic search
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {agenticSearchEnabled ? "Enabled" : "Disabled"}
+                </span>
+                <Switch
+                  id="agentic-search-enabled"
+                  checked={agenticSearchEnabled}
+                  onCheckedChange={setAgenticSearchEnabled}
+                />
+              </div>
+            </div>
             <div className="flex gap-2 items-center ml-2">
-              <span className="text-xs">Search Depth: </span>
+              <span className="text-xs">Max Steps: </span>
               <Slider
                 className="max-w-64"
-                value={[searchDepth]}
-                max={4}
+                value={[maxSteps]}
+                max={8}
                 min={1}
                 step={1}
                 onValueChange={(value) => {
-                  setSearchDepth(value[0])
+                  setMaxSteps(value[0] ?? 5);
                 }}
               />
-              <span className="text-xs">{searchDepth}</span>
+              <span className="text-xs">{maxSteps}</span>
             </div>
           </div>
+
+          {messages[messages.length - 1]?.metadata?.searchMode && status !== "submitted" && (
+            <div className="mb-4">
+              <h3 className="font-semibold mb-2">Agent Run</h3>
+              <div className="text-xs text-muted-foreground">
+                {messages[messages.length - 1]?.metadata?.searchMode === "agent" ? "Agentic search" : "Legacy fan-out"} ·{" "}
+                {messages[messages.length - 1]?.metadata?.stepCount ?? 0} steps ·{" "}
+                {messages[messages.length - 1]?.metadata?.toolCallCount ?? 0} tools
+              </div>
+            </div>
+          )}
 
           {(messages[messages.length - 1]?.metadata?.searchQuery || messages[messages.length - 1]?.metadata?.searchQueries) && status !== "submitted" && (
             <div className="mb-4">
@@ -125,36 +165,46 @@ export function Chat() {
       )}
 
 
-      <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-y-auto", "max-w-3xl")}>
-        <div
-          ref={messagesContainerRef}
-          className="flex flex-col min-w-0 gap-6 flex-1 overflow-y-auto pt-4 pb-36"
+      <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-hidden", "max-w-3xl")}>
+        <ScrollArea
+          viewportRef={messagesContainerRef}
+          className="min-w-0 min-h-0 flex-1"
         >
-          {messages.length === 0 && <Overview />}
+          <div className="flex min-w-0 flex-col gap-6 pt-4 pb-36">
+            {messages.length === 0 && <Overview />}
 
-          {messages.map((message) => (
-            <PreviewMessage
-              key={message.id}
-              message={message}
-              // groundings={messages[messages.length - 1]?.metadata?.groundings}
-              ref={(node: HTMLElement | null) => {
-                if (node) {
-                  messageRefs.current.set(message.id, node);
-                } else {
-                  messageRefs.current.delete(message.id);
+            {messages.map((message) => (
+              <PreviewMessage
+                key={message.id}
+                message={message}
+                onAnswerQuestion={(toolCallId, output) =>
+                  addToolResult({
+                    tool: "ask_question",
+                    toolCallId,
+                    output,
+                    // The auto-resubmit must carry the same request settings,
+                    // or the route falls back to defaults and can switch mode mid-run.
+                    options: { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                  })
                 }
-              }}
-            />
-          ))}
+                // groundings={messages[messages.length - 1]?.metadata?.groundings}
+                ref={(node: HTMLElement | null) => {
+                  if (node) {
+                    messageRefs.current.set(message.id, node);
+                  } else {
+                    messageRefs.current.delete(message.id);
+                  }
+                }}
+              />
+            ))}
 
-          {(status === "submitted" || (status === "streaming" &&
-            lastAssistantMessage &&
-            !lastAssistantHasVisibleContent)) && (
-            <ThinkingMessage query={lastMessage?.metadata?.searchQuery} />
-          )}
-
-
-        </div>
+            {(status === "submitted" || (status === "streaming" &&
+              lastAssistantMessage &&
+              !lastAssistantHasVisibleContent)) && (
+              <ThinkingMessage query={lastMessage?.metadata?.searchQuery} />
+            )}
+          </div>
+        </ScrollArea>
 
         <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full max-w-3xl">
           <MultimodalInput
@@ -166,7 +216,12 @@ export function Chat() {
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) => sendMessage({ text: message }, { body: { searchDepth: searchDepth } })}
+            sendMessage={(message) =>
+              sendMessage(
+                { text: message },
+                { body: { maxSteps, sessionId, agenticSearchEnabled } },
+              )
+            }
           />
         </form>
       </div>

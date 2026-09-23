@@ -2,9 +2,9 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   previewFeatures = ["driverAdapters"]
-  output   = "../src/prisma/client"
+  output          = "../src/prisma/client"
 }
 
 generator dbml {
@@ -12,137 +12,204 @@ generator dbml {
 }
 
 datasource db {
-  provider = "sqlserver"
-  url = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model ClicPage {
-  id Int @id @default(autoincrement())
-  nid Int // page_nid
-  title String
-  content String @db.NVarChar(max)
-  topic String
-  languageCode String // "en", "sc", "tc"
-  url String
-  path String
-  contextualInformation String @db.NVarChar(max)
-  lastUpdatedAt DateTime @updatedAt
+  id                    Int      @id @default(autoincrement())
+  nid                   Int // page_nid
+  title                 String
+  content               String   @db.Text
+  topic                 String
+  languageCode          String // "en", "sc", "tc"
+  url                   String
+  path                  String
+  contextualInformation String   @db.Text
+  lastUpdatedAt         DateTime @updatedAt
 
-  referencingPages ClicPage[] @relation("ClicPageRelationToClicPage")
-  referencedByPages ClicPage[] @relation("ClicPageRelationToClicPage")
+  referencingPages               ClicPage[]           @relation("ClicPageRelationToClicPage")
+  referencedByPages              ClicPage[]           @relation("ClicPageRelationToClicPage")
   referencingLegislationSections LegislationSection[]
-  referencingLegislationCaps LegislationCap[]
-  referencingJudgments Judgment[]
+  referencingLegislationCaps     LegislationCap[]
+  referencingJudgments           Judgment[]
+  chunks                         ClicChunk[]
 
   @@unique([nid, languageCode])
   @@index([nid, languageCode])
 }
 
 model LegislationSection {
-  id Int @id  @default(autoincrement())
-  path String // cap_no/section_no or cap_no/section_no/subsection_no
+  id                   Int            @id @default(autoincrement())
+  path                 String // cap_no/section_no or cap_no/section_no/subsection_no
   parentLegislationCap LegislationCap @relation("ParentCap", fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
 
-  capNumber String
-  sectionHeading String?
-  sectionNumber String
+  capNumber        String
+  sectionHeading   String?
+  sectionNumber    String
   subsectionNumber String?
-  content String @db.NVarChar(max)
-  languageCode String // "en", "sc", "tc"
-  url String
-  eLegislationUrl String?
+  content          String  @db.Text
+  languageCode     String // "en", "sc", "tc"
+  url              String
+  eLegislationUrl  String?
 
-  referencedByClicPages ClicPage[]
-  referencingLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
+  referencedByClicPages           ClicPage[]
+  referencingLegislationSections  LegislationSection[] @relation("LegislationSectionToLegislationSection")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationSection")
-  referencingLegislationCaps LegislationCap[] @relation("LegislationSectionToLegislationCap")
-  referencedByJudgments Judgment[]
-  relatedInterpretations Interpretation[]
+  referencingLegislationCaps      LegislationCap[]     @relation("LegislationSectionToLegislationCap")
+  referencedByJudgments           Judgment[]
+  relatedInterpretations          Interpretation[]
+  chunks                          LegislationChunk[]
 
   @@unique([id, languageCode])
   @@index([capNumber, sectionNumber, subsectionNumber, languageCode])
 }
 
 model LegislationCap {
-  id Int @id @default(autoincrement())
-  capNumber String
-  title String?
-  longTitle String? @db.NVarChar(max)
-  languageCode String // "en", "sc", "tc"
-  url String
+  id              Int      @id @default(autoincrement())
+  capNumber       String
+  title           String?
+  longTitle       String?  @db.Text
+  languageCode    String // "en", "sc", "tc"
+  url             String
   eLegislationUrl String?
-  updatedAt DateTime @updatedAt
+  updatedAt       DateTime @updatedAt
 
-  childSections LegislationSection[] @relation("ParentCap")
+  childSections                   LegislationSection[] @relation("ParentCap")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationCap")
-  referencedByJudgments Judgment[]
-  relatedInterpretations Interpretation[]
-  referencedByClicPages ClicPage[]
+  referencedByJudgments           Judgment[]
+  relatedInterpretations          Interpretation[]
+  referencedByClicPages           ClicPage[]
 
   @@unique([capNumber, languageCode])
   @@index([capNumber, languageCode])
 }
 
-
 model Interpretation {
-  id Int @id @default(autoincrement())
-  term String
-  termDefinition String @db.NVarChar(max)
-  languageCode String // "en", "sc", "tc"
-  
-  parentLegislationCap LegislationCap @relation(fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
-  capNumber String
+  id             Int    @id @default(autoincrement())
+  term           String
+  termDefinition String @db.Text
+  languageCode   String // "en", "sc", "tc"
+
+  parentLegislationCap   LegislationCap       @relation(fields: [capNumber, languageCode], references: [capNumber, languageCode], onDelete: NoAction, onUpdate: NoAction)
+  capNumber              String
   sectionsContainingTerm LegislationSection[]
 
   @@index([capNumber, term, languageCode])
 }
 
 model Judgment {
-  id Int @id
-  neutralCitation String
-  courtName String
-  year Int
-  number Int
-  date DateTime
-  languageCode String // "en", "sc", "tc"
-  isTranslation Boolean
-  coram String ? @db.NVarChar(max)
-  parties String? @db.NVarChar(max)
-  representations String? @db.NVarChar(max)
-  charges String? @db.NVarChar(max)
-  remarks String? @db.NVarChar(max)
-  summary String? @db.NVarChar(max)
-  summarySource String? // e.g. "GENERATED", "DOJ", "TEXTBOOK"
-  legalrefUrl String
-  url String
-  citationIndex Int?
-  inTextbook Boolean @default(false)
-  cases Case[]
-  referencedByClicPages ClicPage[]
+  id                             Int                  @id
+  neutralCitation                String
+  courtName                      String
+  year                           Int
+  number                         Int
+  date                           DateTime
+  languageCode                   String // "en", "sc", "tc"
+  isTranslation                  Boolean
+  coram                          String?              @db.Text
+  parties                        String?              @db.Text
+  representations                String?              @db.Text
+  charges                        String?              @db.Text
+  remarks                        String?              @db.Text
+  summary                        String?              @db.Text
+  summarySource                  String? // e.g. "GENERATED", "DOJ", "TEXTBOOK"
+  legalrefUrl                    String
+  url                            String
+  citationIndex                  Int?
+  inTextbook                     Boolean              @default(false)
+  cases                          Case[]
+  referencedByClicPages          ClicPage[]
   referencingLegislationSections LegislationSection[]
-  referencingLegislationCaps LegislationCap[]
-  referencingJudgments Judgment[] @relation("JudgmentToJudgment")
-  referencedByJudgments Judgment[] @relation("JudgmentToJudgment")
-  parallelCitations ParallelCitations[]
+  referencingLegislationCaps     LegislationCap[]
+  referencingJudgments           Judgment[]           @relation("JudgmentToJudgment")
+  referencedByJudgments          Judgment[]           @relation("JudgmentToJudgment")
+  parallelCitations              ParallelCitations[]
+  chunks                         JudgmentChunk[]
 }
 
 model ParallelCitations {
-  id Int @id
-  citation String
+  id           Int      @id
+  citation     String
   languageCode String // "en", "sc", "tc"
-  judgment Judgment @relation(fields: [judgmentId], references: [id])
-  judgmentId Int
+  judgment     Judgment @relation(fields: [judgmentId], references: [id])
+  judgmentId   Int
 }
 
 model Case {
-  id Int @id
+  id      Int    @id
   caseAct String @unique
   actType String
-  year Int
-  number Int
-  title String
-  cjrId Int
-  cjrDis Int
+  year    Int
+  number  Int
+  title   String
+  cjrId   Int
+  cjrDis  Int
 
   judgments Judgment[]
-} 
+}
+
+model LegislationChunk {
+  id               BigInt                       @id @default(autoincrement())
+  sectionId        Int                          @map("section_id")
+  chunkNo          Int                          @map("chunk_no")
+  languageCode     String                       @map("language_code") // "en", "sc", "tc"
+  capNumber        String                       @map("cap_number")
+  sectionNumber    String                       @map("section_number")
+  subsectionNumber String?                      @map("subsection_number")
+  heading          String?
+  content          String                       @db.Text
+  url              String
+  context          String?                      @db.Text
+  embedding        Unsupported("halfvec(3072)")?
+  tsv              Unsupported("tsvector")?
+  cjkTokens        String?                      @map("cjk_tokens") @db.Text
+  section          LegislationSection           @relation(fields: [sectionId, languageCode], references: [id, languageCode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([sectionId, languageCode, chunkNo])
+  @@index([sectionId, languageCode])
+  @@map("legislation_chunks")
+}
+
+model ClicChunk {
+  id           BigInt                       @id @default(autoincrement())
+  nid          Int
+  chunkNo      Int                          @map("chunk_no")
+  languageCode String                       @map("language_code") // "en", "sc", "tc"
+  title        String
+  content      String                       @db.Text
+  url          String
+  topic        String
+  context      String?                      @db.Text
+  embedding    Unsupported("halfvec(3072)")?
+  tsv          Unsupported("tsvector")?
+  cjkTokens    String?                      @map("cjk_tokens") @db.Text
+  page         ClicPage                     @relation(fields: [nid, languageCode], references: [nid, languageCode], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([nid, languageCode, chunkNo])
+  @@index([nid, languageCode])
+  @@map("clic_chunks")
+}
+
+model JudgmentChunk {
+  id              BigInt                       @id @default(autoincrement())
+  judgmentId      Int                          @map("judgment_id")
+  chunkNo         Int                          @map("chunk_no")
+  languageCode    String                       @map("language_code") // "en", "sc", "tc"
+  neutralCitation String?                      @map("neutral_citation")
+  courtName       String?                      @map("court_name")
+  year            Int?
+  date            DateTime?
+  parties         String?                      @db.Text
+  content         String                       @db.Text
+  summarySource   String?                      @map("summary_source")
+  url             String?
+  embedding       Unsupported("halfvec(3072)")?
+  tsv             Unsupported("tsvector")?
+  cjkTokens       String?                      @map("cjk_tokens") @db.Text
+  judgment        Judgment                     @relation(fields: [judgmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@unique([judgmentId, chunkNo])
+  @@index([judgmentId])
+  @@map("judgment_chunks")
+}

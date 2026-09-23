@@ -1,4 +1,5 @@
 import { SourceUrlUIPart } from "ai";
+import { z } from "zod";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 export const GroundingsDisplay = ({
@@ -78,19 +79,47 @@ export const GroundingsDisplay = ({
   );
 };
 
+const sourceMetadataSchema = z.strictObject({
+  rrf_score: z.number().nullable(),
+  rerank_score: z.number().nullable(),
+  snippet: z.string(),
+});
+
+const legacySourceMetadataSchema = z.strictObject({
+  rrf_score: z.number().nullable().optional(),
+  rerank_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
+  score: z.number().nullable().optional(),
+  caption: z.string().optional(),
+  rerankerScore: z.number().nullable().optional(),
+});
+
+type SourceMetadata = z.infer<typeof sourceMetadataSchema>;
+
+function parseSourceMetadata(value: unknown): SourceMetadata {
+  const current = sourceMetadataSchema.safeParse(value);
+  if (current.success) return current.data;
+
+  const legacy = legacySourceMetadataSchema.safeParse(value);
+  if (legacy.success) {
+    return {
+      rrf_score: legacy.data.rrf_score ?? legacy.data.score ?? null,
+      rerank_score: legacy.data.rerank_score ?? legacy.data.rerankerScore ?? null,
+      snippet: legacy.data.snippet ?? legacy.data.caption ?? "",
+    };
+  }
+
+  return { rrf_score: null, rerank_score: null, snippet: "" };
+}
+
 function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
   return (
     <div>
       <div className="space-y-3">
-        {sources.map((source, index) => {
-          const metaData = source.providerMetadata?.custom as {
-            score: number | null;
-            rerankerScore: number | null;
-            caption: string;
-            captionHighlights: string;
-          };
+        {sources.map((source) => {
+          const metadata = parseSourceMetadata(source.providerMetadata?.custom);
           return (
-            <div key={index} className="p-3 bg-muted/50 rounded-lg">
+            <div key={source.sourceId} className="p-3 bg-muted/50 rounded-lg">
               <h4 className="font-medium">
                 <a
                   href={source.url}
@@ -101,18 +130,13 @@ function SourceGroup({ sources }: { sources: SourceUrlUIPart[] }) {
                 </a>
               </h4>
               <p className="mt-1 text-sm max-h-72 text-ellipsis overflow-auto">
-                {source.providerMetadata?.custom.caption &&
-                  typeof source.providerMetadata.custom
-                    .caption === "string"
-                  ? source.providerMetadata.custom.caption
-                  : ""}
+                {metadata.snippet}
               </p>
-              {(metaData.rerankerScore || metaData.score) && (
+              {(metadata.rerank_score != null || metadata.rrf_score != null) && (
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Score:{" "}
-                  {metaData.rerankerScore
-                    ? metaData.rerankerScore.toFixed(2)
-                    : metaData.score?.toFixed(2)}
+                  {metadata.rerank_score != null
+                    ? `Rerank: ${metadata.rerank_score.toFixed(2)} · RRF: ${metadata.rrf_score?.toFixed(2) ?? "n/a"}`
+                    : `RRF: ${metadata.rrf_score?.toFixed(2) ?? "n/a"}`}
                 </p>
               )}
             </div>

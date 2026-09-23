@@ -1,6 +1,5 @@
 "use client";
 
-import type { ChatRequestOptions  } from "ai";
 import { motion } from "framer-motion";
 import type React from "react";
 import {
@@ -70,7 +69,6 @@ export function MultimodalInput({
     event?: {
       preventDefault?: () => void;
     },
-    chatRequestOptions?: ChatRequestOptions,
   ) => void;
   className?: string;
 }) {
@@ -118,7 +116,7 @@ export function MultimodalInput({
   };
 
   const submitForm = useCallback(() => {
-    handleSubmit(undefined, {});
+    handleSubmit();
     setLocalStorageInput("");
 
     if (width && width > 768) {

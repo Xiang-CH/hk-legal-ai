@@ -1,5 +1,7 @@
-import { InferUITools, ToolSet, UIMessage } from 'ai';
-import z from 'zod';
+import type { DataUIPart, InferAgentUIMessage } from "ai";
+import { z } from "zod";
+
+import type { ChatAgent } from "@/lib/chat-agent";
 
 const clicSchema = z.object({
   nid: z.number(),
@@ -11,7 +13,11 @@ const clicSchema = z.object({
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
   caption: z.string().optional(),
-  captionHighlights: z.string().optional(),
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
 });
 export type ClicPage = z.infer<typeof clicSchema>;
 
@@ -25,6 +31,11 @@ const legislationSchema = z.object({
   url: z.string(),
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
 });
 export type LegislationSection = z.infer<typeof legislationSchema>;
 
@@ -42,57 +53,71 @@ const judgmentSummarySchema = z.object({
   rerankerScore: z.number().optional(),
   score: z.number().optional(),
   caption: z.string().optional(),
-  captionHighlights: z.string().optional(),
+  lexical_rank: z.number().nullable().optional(),
+  vector_distance: z.number().nullable().optional(),
+  rrf_score: z.number().optional(),
+  rerank_score: z.number().nullable().optional(),
+  snippet: z.string().optional(),
 });
 export type JudgmentSummary = z.infer<typeof judgmentSummarySchema>;
 
-const judgementSchema = z.object({
-  case_name: z.string(),
-  court: z.string(),
-  date: z.string(),
-  case_summary: z.string(),
-  case_causes: z.string(),
-  court_decision: z.string(),
-  url: z.string(),
-  rerankerScore: z.number().optional(),
-  score: z.number().optional(),
+const modelCostSchema = z.object({
+  longContext: z.boolean(),
+  uncachedInput: z.number(),
+  cachedInput: z.number(),
+  cacheWrite: z.number(),
+  output: z.number(),
+  total: z.number(),
 });
 
-export const groundingsSchema = z.object({
-  legislation: z.array(legislationSchema),
-  judgement: z.array(judgementSchema),
-  clicPages: z.array(clicSchema),
+const usageSchema = z.object({
+  inputTokens: z.number().optional(),
+  uncachedInputTokens: z.number().optional(),
+  cachedInputTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
+  outputTokens: z.number().optional(),
+  totalTokens: z.number().optional(),
+  reasoningTokens: z.number().optional(),
+  modelCost: modelCostSchema.optional(),
+  rerankCalls: z.number().optional(),
+  rerankDocuments: z.number().optional(),
+  rerankCost: z.number().optional(),
+  foundryCost: z.number().optional(),
 });
 
-export type Groundings = z.infer<typeof groundingsSchema>;
-
-const metadataSchema = z.object({
+export const metadataSchema = z.object({
+  searchMode: z.enum(["agent", "legacy"]).optional(),
+  maxSteps: z.number().int().positive().optional(),
+  toolCallCount: z.number().int().nonnegative().optional(),
+  stepCount: z.number().int().positive().optional(),
   searchQuery: z.string().optional(),
-  groundings: groundingsSchema.optional(),
+  groundings: z.unknown().optional(),
   searchQueries: z.array(z.string()).optional(),
-  usage: z.object({
-    inputTokens: z.number().optional(),
-    outputTokens: z.number().optional(),
-    totalTokens: z.number().optional(),
-    reasoningTokens: z.number().optional(),
-    cachedInputTokens: z.number().optional(),
-  }).optional(),
+  usage: usageSchema.optional(),
 });
 
-type MyMetadata = z.infer<typeof metadataSchema>;
+export type MyMetadata = z.infer<typeof metadataSchema>;
 
-// const dataPartSchema = z.object({
-//   someDataPart: z.object({}),
-//   anotherDataPart: z.object({}),
-// });
+const notificationSchema = z.object({
+  type: z.literal("notification"),
+  message: z.string(),
+  level: z.enum(["info", "warning", "error"]),
+});
 
-type MyDataPart = {
-  type: 'data';
-  data: unknown;
+export const chatDataSchemas = {
+  notification: notificationSchema,
+} as const;
+
+type ChatDataParts = {
+  notification: z.infer<typeof notificationSchema>;
 };
 
-const tools: ToolSet = {};
+type ChatAgentUIMessage = InferAgentUIMessage<ChatAgent, MyMetadata>;
+type ChatAgentUIPart = ChatAgentUIMessage["parts"][number];
+type NonDataAgentPart<PART> = PART extends { type: `data-${string}` }
+  ? never
+  : PART;
 
-type MyTools = InferUITools<typeof tools>;
-
-export type MyUIMessage = UIMessage<MyMetadata, MyDataPart, MyTools>;
+export type MyUIMessage = Omit<ChatAgentUIMessage, "parts"> & {
+  parts: Array<NonDataAgentPart<ChatAgentUIPart> | DataUIPart<ChatDataParts>>;
+};

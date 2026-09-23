@@ -1,15 +1,17 @@
-import { SearchClient, AzureKeyCredential } from "@azure/search-documents";
-import { PrismaClient } from "@/prisma/client";
+import { z } from "zod";
+import { prisma } from "@/lib/prisma";
+import { getEmbeddings, searchClic } from "@/app/api/chat/helper";
 
-const FILTERSTR = "search.in(topic, '{}' , '|')"
-
-const prisma = new PrismaClient();
-
-const searchClient = new SearchClient(
-    process.env.AZURE_SEARCH_ENDPOINT || "",
-    process.env.CLIC_INDEX_NAME || "",
-    new AzureKeyCredential(process.env.AZURE_SEARCH_KEY || "")
-);
+/* T10: pg fusion replaces Azure AI Search. Same {results, clicPages} contract;
+ * `score` carries rrf_score, `caption` carries the ts_headline snippet.
+ * per plan.md §7: pg layer drops rerankerScore/captionHighlights (reranker
+ * adds its own score in the chat flow). languageCode sc/tc now served via
+ * language lanes (old 501 removed). Fusion returns top-30; top/skip slice it. */
+const FUSION_CAP = 30;
+const paginationSchema = z.object({
+	top: z.number().int().min(0).nullish(),
+	skip: z.number().int().min(0).nullish(),
+});
 
 export async function POST(request: Request) {
     try {
@@ -22,59 +24,45 @@ export async function POST(request: Request) {
             return new Response("Language must be one of 'en', 'sc', or 'tc'", { status: 401 });
         }
 
-        const languageCode = body.language_code || "en";
-        if (["sc", "tc"].includes(languageCode)) {
-            return new Response("Chinese language support is not yet implemented", { status: 501 });
+        const languageCode = body.language_code || body.language || "en";
+        if (!["en", "sc", "tc"].includes(languageCode)) {
+            return new Response("Language must be one of 'en', 'sc', or 'tc'", { status: 401 });
         }
 
-        const filter = body.filter? FILTERSTR.replace("{}", body.filter.join("|")) : undefined;
-        const searchResults = await searchClient.search(
-            body.query,
-            {
-                filter: filter,
-                top: body.top ?? 10,
-                skip: body.skip ?? 0,
-                queryType: "semantic",
-                searchMode: "all",
-                select: ["nid", "title", "content", "url", "topic"],
-                semanticSearchOptions: {
-                    configurationName: "clic-semantic-config",
-                    captions:{
-                        captionType: "extractive"
-                    },
-                },
-                vectorSearchOptions: {
-                    queries: [
-                        {
-                            kind: "text",
-                            text: body.query,
-                            fields: ["embedding"],
-                        }
-                    ],
-                },
-            }
-        );
-
-        const results = [];
-        for await (const result of searchResults.results) {
-            console.log(result);
-            const document = result.document as {
-                nid: number;
-                title: string;
-                content: string;
-                url: string;
-                topic: string;
-            };
-            results.push({
-                ...document,
-                score: result.score,
-                rerankerScore: result.rerankerScore,
-                caption: result.captions?.[0]?.text || "",
-                captionHighlights: result.captions?.[0]?.highlights || ""
-            });
+        const pagination = paginationSchema.safeParse(body);
+        if (!pagination.success) {
+            return new Response("Invalid pagination: top/skip must be nonnegative integers", { status: 400 });
         }
-        const nids = results.map((r) => r.nid);
-        const clicPages = await prisma.clicPage.findMany({
+        const top = Math.min(pagination.data.top ?? 10, FUSION_CAP);
+        const skip = pagination.data.skip ?? 0;
+        // Old `filter` was a topic list for search.in(); now topic = ANY($) passthrough.
+        const topics = Array.isArray(body.filter) ? body.filter : undefined;
+
+        const embedding = await getEmbeddings(body.query);
+        const hits = [];
+        for await (const result of searchClic(body.query, {
+            embedding,
+            languageCodes: [languageCode],
+            topics,
+        })) {
+            hits.push(result);
+        }
+
+        const results = hits.slice(skip, skip + top).map((h) => ({
+            nid: h.nid,
+            title: h.title,
+            content: h.content,
+            url: h.url,
+            topic: h.topic,
+            chunk_no: h.chunk_no,
+            score: h.score,
+            caption: h.caption,
+            rrf_score: h.rrf_score,
+            snippet: h.snippet,
+        }));
+
+        const nids = [...new Set(results.map((r) => r.nid))];
+        const clicPages = nids.length ? await prisma.clicPage.findMany({
             where: {
                 nid: { in: nids },
                 languageCode: languageCode,
@@ -84,7 +72,7 @@ export async function POST(request: Request) {
                 referencingLegislationSections: true,
                 referencingLegislationCaps: true,
             },
-        });
+        }) : [];
 
         return Response.json({
             results: results,
