@@ -17,6 +17,7 @@ import {
 } from "ai";
 import { searchClic, searchJudgmentSummary, RERANK_TOP_CLIC, RERANK_TOP_JUDGMENT } from "./helper";
 import { applyRerank, createRerankUsage } from "@/lib/rerank";
+import { calculateGpt6LunaCost } from "@/lib/pricing";
 import { type ClicPage } from "@/lib/types";
 import {
 	propagateAttributes,
@@ -35,6 +36,7 @@ const chatRequestSchema = z.object({
 	messages: z.array(z.unknown()),
 	maxSteps: z.number().int().min(1).optional(),
 	searchDepth: z.number().int().min(1).optional(),
+	agenticSearchEnabled: z.boolean().optional(),
 	sessionId: correlationIdSchema.optional(),
 	userId: correlationIdSchema.optional(),
 });
@@ -406,12 +408,24 @@ async function handleLegacyChat(
 						// T09: rerank cost is per API call (Cohere bills searches, not docs).
 						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
 						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
+						const cost = calculateGpt6LunaCost(usage);
 						const fullUsage = {
-							inputTokens: usage.inputTokens,
-							outputTokens: usage.outputTokens,
+							inputTokens: cost.totalInputTokens,
+							uncachedInputTokens: cost.uncachedInputTokens,
+							cachedInputTokens: cost.cachedInputTokens,
+							cacheWriteTokens: cost.cacheWriteTokens,
+							outputTokens: cost.outputTokens,
 							totalTokens: usage.totalTokens,
-							reasoningTokens: usage.outputTokenDetails.reasoningTokens,
-							cachedInputTokens: usage.inputTokenDetails.cacheReadTokens,
+							reasoningTokens: cost.reasoningTokens,
+							modelCost: {
+								longContext: cost.longContext,
+								uncachedInput: cost.uncachedInputCost,
+								cachedInput: cost.cachedInputCost,
+								cacheWrite: cost.cacheWriteCost,
+								output: cost.outputCost,
+								total: cost.totalCost,
+							},
+							foundryCost: cost.totalCost,
 							rerankCalls: rerankUsage.calls,
 							rerankDocuments: rerankUsage.documents,
 							rerankCost,
@@ -489,7 +503,9 @@ async function handleChatRequest(req: Request): Promise<Response> {
 	const inputText = modelMessages[modelMessages.length - 1]?.content ?? "";
 	const maxSteps = resolveMaxSteps(request.maxSteps);
 	const searchDepth = request.searchDepth ?? 2;
-	const searchMode = process.env.AGENTIC_SEARCH_ENABLED === "true" ? "agent" : "legacy";
+	const agenticSearchEnabled =
+		request.agenticSearchEnabled ?? process.env.AGENTIC_SEARCH_ENABLED === "true";
+	const searchMode = agenticSearchEnabled ? "agent" : "legacy";
 
 	return propagateAttributes(
 		{

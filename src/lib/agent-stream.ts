@@ -3,7 +3,7 @@ import { convertToModelMessages, createUIMessageStreamResponse, toUIMessageStrea
 
 import { langfuseSpanProcessor } from "@/instrumentation";
 import type { ChatAgent } from "@/lib/chat-agent";
-import { cachedInputCostPerToken, inputCostPerToken, outputCostPerToken } from "@/lib/pricing";
+import { calculateGpt6LunaCost } from "@/lib/pricing";
 import {
   caseToolOutputSchema,
   clicToolOutputSchema,
@@ -202,15 +202,7 @@ function toMetadata({
   toolCallCount: number;
   usage: LanguageModelUsage;
 }): MyMetadata {
-  const inputTokens = optionalTokenCount(usage.inputTokens);
-  const outputTokens = optionalTokenCount(usage.outputTokens);
-  const totalTokens = optionalTokenCount(usage.totalTokens);
-  const reasoningTokens = optionalTokenCount(usage.outputTokenDetails.reasoningTokens);
-  const cachedInputTokens = optionalTokenCount(usage.inputTokenDetails.cacheReadTokens);
-  const foundryCost =
-    inputTokens * inputCostPerToken +
-    outputTokens * outputCostPerToken +
-    cachedInputTokens * cachedInputCostPerToken;
+  const cost = calculateGpt6LunaCost(usage);
 
   return {
     searchMode: "agent",
@@ -218,12 +210,22 @@ function toMetadata({
     stepCount,
     toolCallCount,
     usage: {
-      inputTokens,
-      outputTokens,
-      totalTokens,
-      reasoningTokens,
-      cachedInputTokens,
-      foundryCost,
+      inputTokens: cost.totalInputTokens,
+      uncachedInputTokens: cost.uncachedInputTokens,
+      cachedInputTokens: cost.cachedInputTokens,
+      cacheWriteTokens: cost.cacheWriteTokens,
+      outputTokens: cost.outputTokens,
+      totalTokens: optionalTokenCount(usage.totalTokens),
+      reasoningTokens: cost.reasoningTokens,
+      modelCost: {
+        longContext: cost.longContext,
+        uncachedInput: cost.uncachedInputCost,
+        cachedInput: cost.cachedInputCost,
+        cacheWrite: cost.cacheWriteCost,
+        output: cost.outputCost,
+        total: cost.totalCost,
+      },
+      foundryCost: cost.totalCost,
     },
   };
 }

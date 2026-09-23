@@ -270,6 +270,7 @@ async function runCase(testCase) {
       messages: testCase.messages,
       maxSteps: MAX_STEPS,
       searchDepth: 2,
+      agenticSearchEnabled: EXPECTED_MODE === "agent",
       sessionId: `smoke-${EXPECTED_MODE}-${testCase.name}`,
       userId: `smoke-${EXPECTED_MODE}`,
     }),

@@ -61,12 +61,24 @@ const judgmentSummarySchema = z.object({
 });
 export type JudgmentSummary = z.infer<typeof judgmentSummarySchema>;
 
+const modelCostSchema = z.object({
+  longContext: z.boolean(),
+  uncachedInput: z.number(),
+  cachedInput: z.number(),
+  cacheWrite: z.number(),
+  output: z.number(),
+  total: z.number(),
+});
+
 const usageSchema = z.object({
   inputTokens: z.number().optional(),
+  uncachedInputTokens: z.number().optional(),
+  cachedInputTokens: z.number().optional(),
+  cacheWriteTokens: z.number().optional(),
   outputTokens: z.number().optional(),
   totalTokens: z.number().optional(),
   reasoningTokens: z.number().optional(),
-  cachedInputTokens: z.number().optional(),
+  modelCost: modelCostSchema.optional(),
   rerankCalls: z.number().optional(),
   rerankDocuments: z.number().optional(),
   rerankCost: z.number().optional(),

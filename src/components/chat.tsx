@@ -12,13 +12,15 @@ import { cn } from "@/lib/utils";
 import { GroundingsDisplay } from "./groundings-display";
 import { MyUIMessage } from "@/lib/types";
 import { Slider } from "@/components/ui/slider"
+import { Switch } from "@/components/ui/switch";
 
-export function Chat() {
+export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnabled: boolean }) {
   const chatId = "001";
   const [sessionId] = useState(() => crypto.randomUUID());
 
   const [input, setInput] = useState('');
   const [maxSteps, setMaxSteps] = useState(5);
+  const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -27,7 +29,10 @@ export function Chat() {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
-    sendMessage({ text: input }, { body: { maxSteps, sessionId } });
+    sendMessage(
+      { text: input },
+      { body: { maxSteps, sessionId, agenticSearchEnabled } },
+    );
     setInput('');
 
   };
@@ -94,6 +99,21 @@ export function Chat() {
 
           <div className="mb-4">
             <h3 className="font-semibold mb-2">Settings</h3>
+            <div className="mb-3 ml-2 flex items-center justify-between gap-4">
+              <label className="text-xs" htmlFor="agentic-search-enabled">
+                Agentic search
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {agenticSearchEnabled ? "Enabled" : "Disabled"}
+                </span>
+                <Switch
+                  id="agentic-search-enabled"
+                  checked={agenticSearchEnabled}
+                  onCheckedChange={setAgenticSearchEnabled}
+                />
+              </div>
+            </div>
             <div className="flex gap-2 items-center ml-2">
               <span className="text-xs">Max Steps: </span>
               <Slider
@@ -179,7 +199,12 @@ export function Chat() {
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) => sendMessage({ text: message }, { body: { maxSteps, sessionId } })}
+            sendMessage={(message) =>
+              sendMessage(
+                { text: message },
+                { body: { maxSteps, sessionId, agenticSearchEnabled } },
+              )
+            }
           />
         </form>
       </div>

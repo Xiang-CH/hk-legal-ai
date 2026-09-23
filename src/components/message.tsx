@@ -8,7 +8,6 @@ import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import type { MyUIMessage } from "@/lib/types";
-import { inputCostPerToken, outputCostPerToken, cachedInputCostPerToken } from "@/lib/pricing";
 // import { Weather } from "./weather";
 // import { Citation } from "./citation";
 
@@ -229,15 +228,22 @@ const PreviewMessage = React.forwardRef<
           {message.role === "assistant" && isDevMode && message.metadata?.usage && (
             <div className="flex gap-2 w-full max-w-full flex-wrap text-gray-500 text-xs mt-2">
 
-              <span>Input Tokens: {message.metadata.usage.inputTokens} (${((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken).toFixed(8)})</span>
-              <span>Output Tokens: {message.metadata.usage.outputTokens} (${((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken).toFixed(8)})</span>
+              <span>Input Tokens: {message.metadata.usage.inputTokens}</span>
+              <span>Uncached Input: {message.metadata.usage.uncachedInputTokens ?? 0} (${(message.metadata.usage.modelCost?.uncachedInput ?? 0).toFixed(8)})</span>
               {
-                message.metadata.usage.cachedInputTokens && message.metadata.usage.cachedInputTokens > 0 && (
-                  <span>Cached Input Tokens: {message.metadata.usage.cachedInputTokens} (${(message.metadata.usage.cachedInputTokens * cachedInputCostPerToken).toFixed(8)})</span>
-              )}
+                (message.metadata.usage.cachedInputTokens ?? 0) > 0 && (
+                  <span>Cached Input: {message.metadata.usage.cachedInputTokens} (${(message.metadata.usage.modelCost?.cachedInput ?? 0).toFixed(8)})</span>
+                )
+              }
               {
-                message.metadata.usage.reasoningTokens && message.metadata.usage.reasoningTokens > 0 && (
-                  <span>Reasoning Tokens: {message.metadata.usage.reasoningTokens} (${(message.metadata.usage.reasoningTokens * outputCostPerToken).toFixed(8)})</span>
+                (message.metadata.usage.cacheWriteTokens ?? 0) > 0 && (
+                  <span>Cache Writes: {message.metadata.usage.cacheWriteTokens} (${(message.metadata.usage.modelCost?.cacheWrite ?? 0).toFixed(8)})</span>
+                )
+              }
+              <span>Output Tokens: {message.metadata.usage.outputTokens} (${(message.metadata.usage.modelCost?.output ?? 0).toFixed(8)})</span>
+              {
+                (message.metadata.usage.reasoningTokens ?? 0) > 0 && (
+                  <span>Reasoning Tokens: {message.metadata.usage.reasoningTokens} (included in output)</span>
                 )
               }
               {
@@ -246,7 +252,7 @@ const PreviewMessage = React.forwardRef<
                 )
               }
               <span>Total Tokens: {message.metadata.usage.totalTokens}</span>
-              <span>Total Cost: ${(((message.metadata.usage.inputTokens ?? 0) * inputCostPerToken) + ((message.metadata.usage.outputTokens ?? 0) * outputCostPerToken) + ((message.metadata.usage.cachedInputTokens ?? 0) * cachedInputCostPerToken) + (message.metadata.usage.rerankCost ?? 0)).toFixed(8)}</span>
+              <span>Total Cost: ${((message.metadata.usage.modelCost?.total ?? message.metadata.usage.foundryCost ?? 0) + (message.metadata.usage.rerankCost ?? 0)).toFixed(8)}</span>
             </div>
           )}
 
