@@ -3,34 +3,58 @@
 import { PreviewMessage, ThinkingMessage } from "@/components/message";
 import { MultimodalInput } from "@/components/multimodal-input";
 import { Overview } from "@/components/overview";
+import { ConversationSidebar } from "@/components/conversation-sidebar";
 import { useScroll } from "@/hooks/use-scroll-to-bottom";
 import { useDevMode } from "@/hooks/use-dev-mode";
+import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from '@ai-sdk/react'
 import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { PanelLeftOpen, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { deriveTitle, loadMessages, saveMessages } from "@/lib/conversations";
 import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
+import { Button } from "./ui/button";
 import { MyUIMessage } from "@/lib/types";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
 export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnabled: boolean }) {
   const chatId = "001";
-  const [sessionId] = useState(() => crypto.randomUUID());
+  const {
+    conversations,
+    activeId,
+    activeConversation,
+    isLoaded: conversationsLoaded,
+    createConversation,
+    selectConversation,
+    deleteConversation,
+    touchConversation,
+  } = useConversations();
+  // The conversation id doubles as the backend session id, so a resumed
+  // conversation continues the same server-side trace.
+  const sessionId = activeId ?? "pending";
 
   const [input, setInput] = useState('');
   const [maxSteps, setMaxSteps] = useState(5);
   const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
+  const hydratedConversation = useRef<string | null>(null);
+  // Message count at hydration time. The thread only counts as edited when it
+  // grows past this (user submitted a new message) — merely opening it must
+  // not reorder the list.
+  const baselineCount = useRef(0);
 
   const handleSubmit = (e?: { preventDefault?: (() => void) }): void => {
     if (e && e.preventDefault) {
       e.preventDefault();
     }
+    if (!activeId || input.trim().length === 0) return;
     sendMessage(
       { text: input },
       { body: { maxSteps, sessionId, agenticSearchEnabled } },
@@ -60,6 +84,56 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
       }
     },
   });
+
+  const isBusy = status === "submitted" || status === "streaming";
+
+  // Load the active conversation's messages from the browser store on switch.
+  useEffect(() => {
+    if (!conversationsLoaded || !activeId) return;
+    if (hydratedConversation.current === activeId) return;
+    hydratedConversation.current = activeId;
+    messageRefs.current.clear();
+    // The input draft is owned by MultimodalInput (per-conversation key);
+    // clearing here would wipe the restored draft (parent effects run last).
+    const stored = loadMessages(activeId);
+    baselineCount.current = stored.length;
+    // Keep in-flight messages if the user sent one before hydration finished.
+    if (stored.length > 0 || messages.length === 0) {
+      setMessages(stored);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversationsLoaded, activeId, setMessages]);
+
+  // Persist messages to the browser store; refresh title/recency only when
+  // the thread actually grew (a new message was submitted in it).
+  useEffect(() => {
+    if (!conversationsLoaded || !activeId) return;
+    if (hydratedConversation.current !== activeId) return;
+    saveMessages(activeId, messages);
+    if (messages.length > baselineCount.current) {
+      baselineCount.current = messages.length;
+      touchConversation(activeId, deriveTitle(messages));
+    }
+  }, [messages, activeId, conversationsLoaded, touchConversation]);
+
+  const handleNewConversation = () => {
+    if (isBusy) stop();
+    messageRefs.current.clear();
+    setInput("");
+    setMessages([]);
+    createConversation();
+  };
+
+  const handleSelectConversation = (id: string) => {
+    if (id === activeId) return;
+    if (isBusy) stop();
+    selectConversation(id);
+  };
+
+  const handleDeleteConversation = (id: string) => {
+    if (isBusy && id === activeId) stop();
+    deleteConversation(id);
+  };
 
   const [messagesContainerRef, scrollToElement] =
     useScroll<HTMLDivElement>();
@@ -99,8 +173,52 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   }, [messages, scrollToElement, messagesContainerRef]);
 
   return (
-    <div className={cn("flex h-[calc(100dvh-52px)] max-h-[calc(100dvh-52px)]", "justify-center")}>
+    <div className="flex h-[calc(100dvh-52px)] max-h-[calc(100dvh-52px)] w-full">
 
+      {/* History sidebar (desktop) */}
+      {sidebarOpen && (
+        <div className="hidden h-full md:block">
+          <ConversationSidebar
+            conversations={conversations}
+            activeId={activeId}
+            onSelect={handleSelectConversation}
+            onNew={handleNewConversation}
+            onDelete={handleDeleteConversation}
+            onCollapse={() => setSidebarOpen(false)}
+            disabled={isBusy}
+          />
+        </div>
+      )}
+
+      {/* History sidebar (mobile overlay) */}
+      {sidebarOpen && (
+        <div className="fixed inset-0 z-40 md:hidden">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setSidebarOpen(false)}
+          />
+          <div className="absolute inset-y-0 left-0 h-full">
+            <ConversationSidebar
+              conversations={conversations}
+              activeId={activeId}
+              onSelect={(id) => {
+                handleSelectConversation(id);
+                setSidebarOpen(false);
+              }}
+              onNew={() => {
+                handleNewConversation();
+                setSidebarOpen(false);
+              }}
+              onDelete={handleDeleteConversation}
+              onCollapse={() => setSidebarOpen(false)}
+              disabled={isBusy}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Centers the dev panel + chat column in the space beside the sidebar. */}
+      <div className="flex min-w-0 flex-1 justify-center overflow-hidden">
       {isDevMode && (
         <div className="col-span-1 p-4 border-r border-border overflow-y-auto h-full min-w-2xs flex-1/2 max-w-[50rem]">
 
@@ -166,6 +284,32 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
 
 
       <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-hidden", "max-w-3xl")}>
+        <div className="flex items-center gap-1 px-3 pt-2">
+          {!sidebarOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="Show conversation history"
+            >
+              <PanelLeftOpen size={17} />
+            </Button>
+          )}
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+            {activeConversation?.title ?? "New conversation"}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            onClick={handleNewConversation}
+            disabled={isBusy}
+            aria-label="Start a new conversation"
+          >
+            <Plus size={17} />
+          </Button>
+        </div>
         <ScrollArea
           viewportRef={messagesContainerRef}
           className="min-w-0 min-h-0 flex-1"
@@ -209,10 +353,11 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
         <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full max-w-3xl">
           <MultimodalInput
             chatId={chatId}
+            draftId={activeId ?? undefined}
             input={input}
             setInput={setInput}
             handleSubmit={handleSubmit}
-            isLoading={(status === "submitted" || status === "streaming")}
+            isLoading={isBusy}
             stop={stop}
             messages={messages}
             setMessages={setMessages}
@@ -224,6 +369,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
             }
           />
         </form>
+      </div>
       </div>
 
     </div>

@@ -285,7 +285,7 @@ const PreviewMessage = React.forwardRef<
   return (
     <motion.div
       ref={ref}
-      className="w-full mx-auto max-w-3xl px-4 group/message scroll-mt-4"
+      className="w-full min-w-0 mx-auto max-w-3xl px-4 group/message scroll-mt-4"
       initial={{ y: 5, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       data-role={message.role}
@@ -423,7 +423,7 @@ export const ThinkingMessage = ({
 
   return (
     <motion.div
-      className="w-full mx-auto max-w-3xl px-4 group/message "
+      className="w-full min-w-0 mx-auto max-w-3xl px-4 group/message "
       initial={{ y: 5, opacity: 0 }}
       animate={{ y: 0, opacity: 1, transition: { delay: 1 } }}
       data-role={role}
@@ -440,8 +440,8 @@ export const ThinkingMessage = ({
           <SparklesIcon size={14} />
         </div>
 
-        <div className="flex flex-col gap-2 w-full">
-          <div className="flex flex-col text-muted-foreground">
+        <div className="flex min-w-0 flex-col gap-2 w-full">
+          <div className="flex min-w-0 flex-col text-muted-foreground">
             {query ? (
               <motion.span
                 initial={{ opacity: 0.2 }}
