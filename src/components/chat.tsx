@@ -41,12 +41,18 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const [maxSteps, setMaxSteps] = useState(5);
   const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  // Collapse the history sidebar on small screens. Done in an effect so the
-  // first client render matches the server render.
+  // Collapse the history sidebar on small screens (and keep it in sync on
+  // rotation/resize). A mount effect keeps the first client render identical
+  // to the server render; state updates happen only in the media-query
+  // subscription callback, never synchronously in the effect body.
   useEffect(() => {
-    if (!window.matchMedia('(min-width: 768px)').matches) {
-      setSidebarOpen(false);
-    }
+    const mql = window.matchMedia('(min-width: 768px)');
+    const syncFromViewport = () => {
+      if (!mql.matches) setSidebarOpen(false);
+    };
+    syncFromViewport();
+    mql.addEventListener('change', syncFromViewport);
+    return () => mql.removeEventListener('change', syncFromViewport);
   }, []);
   const { isDevMode } = useDevMode();
 
