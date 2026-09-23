@@ -10,7 +10,7 @@ import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import type { MyUIMessage } from "@/lib/types";
-import type { AskQuestionOutput } from "@/lib/search-tools";
+import type { AskQuestionOutput } from "@/lib/tools";
 import { AskQuestionCard, type AskQuestionPart } from "./ask-question";
 // import { Weather } from "./weather";
 // import { Citation } from "./citation";

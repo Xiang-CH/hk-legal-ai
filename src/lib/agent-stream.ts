@@ -12,7 +12,7 @@ import {
   fullSearchOutputSchema,
   ordinanceSectionToolOutputSchema,
   searchTools,
-} from "@/lib/search-tools";
+} from "@/lib/tools";
 import type { MyMetadata, MyUIMessage } from "@/lib/types";
 import { z } from "zod";
 

@@ -6,7 +6,7 @@ import { Check, CircleHelp, Send } from "lucide-react";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { cn } from "@/lib/utils";
-import type { AskQuestionOutput } from "@/lib/search-tools";
+import type { AskQuestionOutput } from "@/lib/tools";
 import type { MyUIMessage } from "@/lib/types";
 
 export type AskQuestionPart = Extract<MyUIMessage["parts"][number], { type: "tool-ask_question" }>;

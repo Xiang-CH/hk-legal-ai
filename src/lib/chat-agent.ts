@@ -2,7 +2,7 @@ import { ToolLoopAgent, stepCountIs } from "ai";
 
 import { azure } from "@/app/api/chat/helper";
 import { searchPrompt } from "@/lib/prompts";
-import { searchTools } from "@/lib/search-tools";
+import { searchTools } from "@/lib/tools";
 
 export const DEFAULT_AGENT_MAX_STEPS = 5;
 export const AGENT_MAX_STEPS_CAP = 8;

@@ -5,7 +5,7 @@ import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/typ
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
 import { createChatAgent, createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
 import { createAgenticChatResponse, type TraceCompletion } from "@/lib/agent-stream";
-import { searchTools } from "@/lib/search-tools";
+import { searchTools } from "@/lib/tools";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
 import { sourcePrompt } from "@/lib/prompts";
 import {
