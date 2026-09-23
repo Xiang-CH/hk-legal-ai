@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
+  MAX_CONVERSATIONS,
   NEW_CONVERSATION_TITLE,
   deleteStoredMessages,
   loadActiveId,
@@ -56,7 +57,7 @@ export function useConversations() {
       updatedAt: now,
     };
     setConversations((prev) => {
-      const next = [meta, ...prev];
+      const next = [meta, ...prev].slice(0, MAX_CONVERSATIONS);
       saveConversationList(next);
       return next;
     });

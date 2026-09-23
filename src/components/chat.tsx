@@ -41,6 +41,13 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const [maxSteps, setMaxSteps] = useState(5);
   const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Collapse the history sidebar on small screens. Done in an effect so the
+  // first client render matches the server render.
+  useEffect(() => {
+    if (!window.matchMedia('(min-width: 768px)').matches) {
+      setSidebarOpen(false);
+    }
+  }, []);
   const { isDevMode } = useDevMode();
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
@@ -49,6 +56,9 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   // grows past this (user submitted a new message) — merely opening it must
   // not reorder the list.
   const baselineCount = useRef(0);
+  // Set in the commit where hydration swaps conversations: messages in that
+  // commit still belongs to the previous conversation, so skip persisting it.
+  const skipPersist = useRef(false);
 
   const handleSubmit = (e?: { preventDefault?: (() => void) }): void => {
     if (e && e.preventDefault) {
@@ -91,16 +101,20 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   useEffect(() => {
     if (!conversationsLoaded || !activeId) return;
     if (hydratedConversation.current === activeId) return;
+    const isFirstHydration = hydratedConversation.current === null;
     hydratedConversation.current = activeId;
     messageRefs.current.clear();
     // The input draft is owned by MultimodalInput (per-conversation key);
     // clearing here would wipe the restored draft (parent effects run last).
     const stored = loadMessages(activeId);
     baselineCount.current = stored.length;
-    // Keep in-flight messages if the user sent one before hydration finished.
-    if (stored.length > 0 || messages.length === 0) {
+    // Keep in-flight messages only on the first hydration after mount; later
+    // switches always load the selected conversation, even when empty.
+    if (!isFirstHydration || stored.length > 0 || messages.length === 0) {
       setMessages(stored);
     }
+    // messages in this commit still belongs to the previous conversation.
+    skipPersist.current = true;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationsLoaded, activeId, setMessages]);
 
@@ -109,6 +123,10 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   useEffect(() => {
     if (!conversationsLoaded || !activeId) return;
     if (hydratedConversation.current !== activeId) return;
+    if (skipPersist.current) {
+      skipPersist.current = false;
+      return;
+    }
     saveMessages(activeId, messages);
     if (messages.length > baselineCount.current) {
       baselineCount.current = messages.length;
@@ -361,12 +379,15 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
             stop={stop}
             messages={messages}
             setMessages={setMessages}
-            sendMessage={(message) =>
+            sendMessage={(message) => {
+              // Suggested actions render before the store hydrates; never
+              // send with the placeholder session id.
+              if (!activeId) return;
               sendMessage(
                 { text: message },
                 { body: { maxSteps, sessionId, agenticSearchEnabled } },
-              )
-            }
+              );
+            }}
           />
         </form>
       </div>

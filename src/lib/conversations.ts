@@ -9,13 +9,27 @@ export interface ConversationMeta {
 
 const LIST_KEY = "clic-chat:conversations:v1";
 const ACTIVE_KEY = "clic-chat:active-id:v1";
-const MAX_CONVERSATIONS = 50;
+export const MAX_CONVERSATIONS = 50;
 const TITLE_MAX_LENGTH = 30;
 
 const msgKey = (id: string) => `clic-chat:messages:${id}:v1`;
 
 function isBrowser(): boolean {
-  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+  if (typeof window === "undefined") return false;
+  try {
+    return typeof window.localStorage !== "undefined";
+  } catch {
+    return false;
+  }
+}
+
+function safeGet(key: string): string | null {
+  if (!isBrowser()) return null;
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
 }
 
 function safeParse<T>(raw: string | null, fallback: T): T {
@@ -37,7 +51,7 @@ export function newConversationId(): string {
 /** Sorted newest-first. Returns [] outside the browser. */
 export function loadConversationList(): ConversationMeta[] {
   if (!isBrowser()) return [];
-  const list = safeParse<ConversationMeta[]>(window.localStorage.getItem(LIST_KEY), []);
+  const list = safeParse<ConversationMeta[]>(safeGet(LIST_KEY), []);
   if (!Array.isArray(list)) return [];
   return list
     .filter((c) => c && typeof c.id === "string")
@@ -46,6 +60,11 @@ export function loadConversationList(): ConversationMeta[] {
 
 export function saveConversationList(list: ConversationMeta[]): void {
   if (!isBrowser()) return;
+  // Drop message/draft keys of conversations that fall beyond the cap so
+  // repeated creation cannot leak stale keys into the store.
+  for (const dropped of list.slice(MAX_CONVERSATIONS)) {
+    deleteStoredMessages(dropped.id);
+  }
   try {
     window.localStorage.setItem(LIST_KEY, JSON.stringify(list.slice(0, MAX_CONVERSATIONS)));
   } catch {
@@ -55,7 +74,7 @@ export function saveConversationList(list: ConversationMeta[]): void {
 
 export function loadActiveId(): string | null {
   if (!isBrowser()) return null;
-  const id = window.localStorage.getItem(ACTIVE_KEY);
+  const id = safeGet(ACTIVE_KEY);
   return id && id.length > 0 ? id : null;
 }
 
@@ -70,7 +89,7 @@ export function saveActiveId(id: string): void {
 
 export function loadMessages(id: string): MyUIMessage[] {
   if (!isBrowser()) return [];
-  const list = safeParse<MyUIMessage[]>(window.localStorage.getItem(msgKey(id)), []);
+  const list = safeParse<MyUIMessage[]>(safeGet(msgKey(id)), []);
   return Array.isArray(list) ? list : [];
 }
 
