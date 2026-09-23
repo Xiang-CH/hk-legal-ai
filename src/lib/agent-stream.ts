@@ -9,6 +9,7 @@ import {
   clicToolOutputSchema,
   judgmentToolOutputSchema,
   legislationToolOutputSchema,
+  fullSearchOutputSchema,
   ordinanceSectionToolOutputSchema,
   searchTools,
 } from "@/lib/search-tools";
@@ -24,7 +25,8 @@ type SearchToolName =
   | "search_judgments"
   | "search_legislation"
   | "get_ordinance_section"
-  | "get_case";
+  | "get_case"
+  | "full_search";
 
 const sourceMetadataSchema = z.strictObject({
   rrf_score: z.number().nullable(),
@@ -127,6 +129,46 @@ export function mapToolOutputToSources(toolName: SearchToolName, output: unknown
         });
         return mapped ? [mapped] : [];
       });
+    }
+    case "full_search": {
+      const parsed = fullSearchOutputSchema.safeParse(output);
+      if (!parsed.success || "error" in parsed.data) return [];
+      const seeds: SourceSeed[] = [];
+      for (const item of parsed.data.results) {
+        let seed: SourceSeed | null = null;
+        if (item.kind === "clic") {
+          seed = source({
+            sourceId: `clic-${item.nid}-${item.chunk_no}`,
+            url: item.url,
+            title: item.title,
+            rrfScore: item.rrf_score,
+            rerankScore: item.rerank_score,
+            snippet: item.snippet,
+          });
+        } else if (item.kind === "judgment") {
+          if (!item.url) continue;
+          seed = source({
+            sourceId: `judgment-${item.judgmentId}-${item.chunk_no}`,
+            url: item.url,
+            title: item.neutralCitation ?? item.courtName ?? `Judgment ${item.judgmentId}`,
+            rrfScore: item.rrf_score,
+            rerankScore: item.rerank_score,
+            snippet: item.snippet,
+            baseUrl: "https://hklii.hk",
+          });
+        } else {
+          seed = source({
+            sourceId: `cap-${item.capNumber}-${item.sectionNumber}`,
+            url: item.url,
+            title: `Cap ${item.capNumber}, section ${item.sectionNumber}${item.heading ? `: ${item.heading}` : ""}`,
+            rrfScore: item.rrf_score,
+            rerankScore: item.rerank_score,
+            snippet: item.snippet,
+          });
+        }
+        if (seed) seeds.push(seed);
+      }
+      return seeds;
     }
     case "get_ordinance_section": {
       const parsed = ordinanceSectionToolOutputSchema.safeParse(output);
@@ -356,6 +398,7 @@ function isSearchToolName(value: string): value is SearchToolName {
     value === "search_judgments" ||
     value === "search_legislation" ||
     value === "get_ordinance_section" ||
-    value === "get_case"
+    value === "get_case" ||
+    value === "full_search"
   );
 }

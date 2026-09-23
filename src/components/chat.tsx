@@ -6,6 +6,7 @@ import { Overview } from "@/components/overview";
 import { useScroll } from "@/hooks/use-scroll-to-bottom";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import { useChat } from '@ai-sdk/react'
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -41,10 +42,13 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     messages,
     setMessages,
     sendMessage,
+    addToolResult,
     status,
     stop
   } = useChat<MyUIMessage>({
     throttle: 50,
+    // Resumes the agent after the user answers an ask_question tool call.
+    sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onError: (error) => {
       if (error.message.includes("Too many requests")) {
         toast.error(
@@ -70,7 +74,9 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
       part.type === "tool-search_judgments" ||
       part.type === "tool-search_legislation" ||
       part.type === "tool-get_ordinance_section" ||
-      part.type === "tool-get_case";
+      part.type === "tool-get_case" ||
+      part.type === "tool-full_search" ||
+      part.type === "tool-ask_question";
   }) ?? false;
 
   useEffect(() => {
@@ -169,6 +175,9 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
             <PreviewMessage
               key={message.id}
               message={message}
+              onAnswerQuestion={(toolCallId, output) =>
+                addToolResult({ tool: "ask_question", toolCallId, output })
+              }
               // groundings={messages[messages.length - 1]?.metadata?.groundings}
               ref={(node: HTMLElement | null) => {
                 if (node) {

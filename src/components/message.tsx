@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 
-import { ChevronDownIcon } from "lucide-react";
+import { Check, ChevronDownIcon } from "lucide-react";
 import { SparklesIcon } from "./icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Markdown } from "./markdown";
@@ -10,6 +10,8 @@ import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import type { MyUIMessage } from "@/lib/types";
+import type { AskQuestionOutput } from "@/lib/search-tools";
+import { AskQuestionCard, type AskQuestionPart } from "./ask-question";
 // import { Weather } from "./weather";
 // import { Citation } from "./citation";
 
@@ -24,7 +26,13 @@ const toolLabels = {
   "tool-search_legislation": "Search legislation",
   "tool-get_ordinance_section": "Read ordinance section",
   "tool-get_case": "Read case details",
+  "tool-full_search": "Broad fan-out search",
+  "tool-ask_question": "Clarifying question",
 } satisfies Record<ChatToolPart["type"], string>;
+
+function isAskQuestionPart(part: MessagePart): part is AskQuestionPart {
+  return part.type === "tool-ask_question";
+}
 
 function isChatToolPart(part: MessagePart): part is ChatToolPart {
   return (
@@ -32,7 +40,8 @@ function isChatToolPart(part: MessagePart): part is ChatToolPart {
     part.type === "tool-search_judgments" ||
     part.type === "tool-search_legislation" ||
     part.type === "tool-get_ordinance_section" ||
-    part.type === "tool-get_case"
+    part.type === "tool-get_case" ||
+    part.type === "tool-full_search"
   );
 }
 
@@ -81,6 +90,15 @@ function toolInputSummary(part: ChatToolPart): string | null {
     }
     case "tool-get_case": {
       return stringField(input, "action_no") ?? stringField(input, "case_name");
+    }
+    case "tool-full_search": {
+      const raw = input["queries"];
+      const queries = Array.isArray(raw) ? raw.filter((q): q is string => typeof q === "string") : [];
+      const query = queries[0]?.trim() || null;
+      const extra = queries.length > 1 ? ` +${queries.length - 1}` : "";
+      const depth = input["searchDepth"];
+      if (query && typeof depth === "number") return `${query}${extra} · depth ${depth}`;
+      return query ? `${query}${extra}` : null;
     }
     default:
       return null;
@@ -139,28 +157,26 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
   const keywords = toolInputSummary(part);
   return (
     <div
-      className="flex items-center justify-between gap-3 rounded-xl border border-border/70 bg-muted/40 px-4 py-3 text-sm"
+      className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
       data-pending={state.pending}
     >
-      <div className="min-w-0">
-        <div className="font-medium">{toolLabels[part.type]}</div>
-        {keywords && (
-          <div className="line-clamp-2 break-words text-muted-foreground" title={keywords}>
-            &ldquo;{keywords}&rdquo;
-          </div>
-        )}
-        <div className={state.failed ? "text-destructive" : "text-muted-foreground"}>
-          {state.label}
-        </div>
-      </div>
-      {state.pending && (
+      {state.pending ? (
         <motion.span
           aria-label="Tool running"
-          className="size-2 shrink-0 rounded-full bg-primary"
+          className="size-1.5 shrink-0 rounded-full bg-primary"
           animate={{ opacity: [0.25, 1, 0.25] }}
           transition={{ duration: 1.2, repeat: Infinity }}
         />
+      ) : (
+        <Check className={cn("size-3.5 shrink-0", state.failed && "text-destructive")} />
       )}
+      <span className="shrink-0 font-medium">{toolLabels[part.type]}</span>
+      {keywords && (
+        <span className="min-w-0 flex-1 truncate" title={keywords}>
+          &ldquo;{keywords}&rdquo;
+        </span>
+      )}
+      <span className={cn("shrink-0", state.failed && "text-destructive")}>{state.label}</span>
     </div>
   );
 }
@@ -190,12 +206,45 @@ function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boole
   );
 }
 
+type ReasoningUIPart = Extract<MessagePart, { type: "reasoning" }>;
+
+type RenderItem =
+  | { kind: "part"; part: MessagePart; index: number }
+  | { kind: "reasoning-group"; parts: ReasoningUIPart[]; startIndex: number };
+
+/** Merge runs of adjacent reasoning parts so multi-step thinking shows as one card. */
+function groupConsecutiveReasoning(parts: MessagePart[]): RenderItem[] {
+  const items: RenderItem[] = [];
+  let i = 0;
+  while (i < parts.length) {
+    const part = parts[i];
+    if (part?.type === "reasoning") {
+      const group: ReasoningUIPart[] = [];
+      const startIndex = i;
+      while (i < parts.length && parts[i]?.type === "reasoning") {
+        group.push(parts[i] as ReasoningUIPart);
+        i += 1;
+      }
+      if (group.some((p) => p.text.trim().length > 0)) {
+        items.push({ kind: "reasoning-group", parts: group, startIndex });
+      }
+    } else if (part) {
+      items.push({ kind: "part", part, index: i });
+      i += 1;
+    } else {
+      i += 1;
+    }
+  }
+  return items;
+}
+
 const PreviewMessage = React.forwardRef<
   HTMLDivElement,
   {
     message: MyUIMessage;
+    onAnswerQuestion?: (toolCallId: string, output: AskQuestionOutput) => void;
   }
->(({ message }, ref) => {
+>(({ message, onAnswerQuestion }, ref) => {
   const { isDevMode } = useDevMode();
   if (message.parts.length === 0) return null;
 
@@ -203,6 +252,7 @@ const PreviewMessage = React.forwardRef<
   const reasoningParts = message.parts.filter((part) => part.type === "reasoning");
   const fileParts = message.parts.filter((part) => part.type === "file");
   const toolParts = message.parts.filter(isChatToolPart);
+  const askQuestionParts = message.parts.filter(isAskQuestionPart);
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
   const completedToolCount = toolParts.filter((part) => part.state === "output-available").length;
@@ -213,6 +263,7 @@ const PreviewMessage = React.forwardRef<
     !hasTextContent &&
     !hasReasoningContent &&
     toolParts.length === 0 &&
+    askQuestionParts.length === 0 &&
     fileParts.length === 0
   ) return null;
 
@@ -258,19 +309,31 @@ const PreviewMessage = React.forwardRef<
           )}
 
           {message.role === "assistant" &&
-            message.parts?.map((part, index) => {
-              if (isChatToolPart(part)) {
-                return <ToolProgress key={part.toolCallId} part={part} />;
-              }
-
-              if (part.type === "reasoning" && part.text.trim().length > 0) {
+            groupConsecutiveReasoning(message.parts ?? []).map((item) => {
+              if (item.kind === "reasoning-group") {
                 return (
                   <ReasoningCard
-                    key={`${part.type}-${index}`}
-                    text={part.text}
-                    isStreaming={part.state === "streaming"}
+                    key={`reasoning-${item.startIndex}`}
+                    text={item.parts.map((p) => p.text).join("\n\n")}
+                    isStreaming={item.parts.some((p) => p.state === "streaming")}
                   />
                 );
+              }
+
+              const part = item.part;
+              const index = item.index;
+              if (isAskQuestionPart(part)) {
+                return (
+                  <AskQuestionCard
+                    key={part.toolCallId}
+                    part={part}
+                    onAnswer={(output) => onAnswerQuestion?.(part.toolCallId, output)}
+                  />
+                );
+              }
+
+              if (isChatToolPart(part)) {
+                return <ToolProgress key={part.toolCallId} part={part} />;
               }
 
               if (part.type === "text") {
