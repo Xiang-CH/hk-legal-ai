@@ -61,6 +61,9 @@ export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<JudgmentToolOutput> {
 	const terms = fallbackSearchTerms(args.query);
 	const primaryTerm = fallbackPrimaryTerm(terms);
+	// No usable term to constrain the lookup: return nothing rather than
+	// arbitrary rows the model could cite.
+	if (!primaryTerm) return { results: [] };
 	const rows = await prisma.judgmentChunk.findMany({
 		where: {
 			...(args.languageCode ? { languageCode: args.languageCode } : {}),
@@ -87,6 +90,7 @@ async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<Judgm
 			0,
 			),
 		}))
+		.filter(({ score }) => score > 0)
 		.sort((left, right) => right.score - left.score)
 		.slice(0, RERANK_TOP_JUDGMENT);
 	const judgmentIds = rankedRows.map(({ item }) => item.judgmentId);

@@ -30,22 +30,26 @@ const counts = { clic: 0, judgment: 0, skipped: 0 };
 const needEmb = (rows, label) => { const n = rows.filter((r) => !r.embedding || !r.embedding.length).length; if (n) throw new Error(`${label}: ${n}/${rows.length} rows lack embeddings — run scripts/embed-clic-judgment.mjs first`); };
 try {
   if (!SKIP_LOAD) {
-  // --- clic_chunks (en) ---
-  const clic = JSON.parse(fs.readFileSync(path.join(__dirname, 'index-output/chunks-en.json'), 'utf8'));
-  needEmb(clic, 'clic');
-  log(`clic chunks in JSON: ${clic.length}`);
+  // --- clic_chunks (en/sc/tc) ---
+  for (const lang of ['en', 'sc', 'tc']) {
+  const f = path.join(__dirname, `index-output/chunks-${lang}.json`);
+  if (!fs.existsSync(f)) { log(`clic-${lang}: ${f} missing, skipping`); continue; }
+  const clic = JSON.parse(fs.readFileSync(f, 'utf8'));
+  needEmb(clic, `clic-${lang}`);
+  log(`clic-${lang} chunks in JSON: ${clic.length}`);
   for (let i = 0; i < clic.length; i += 100) {
     const batch = clic.slice(i, i + 100);
     const params = [];
     const tuples = batch.map((c) => {
-      params.push(c.nid, c.chunk_no, 'en', c.title, c.content, c.url, c.topic, c.context ?? null, vec(c.embedding));
+      params.push(c.nid, c.chunk_no, lang, c.title, c.content, c.url, c.topic, c.context ?? null, vec(c.embedding));
       const o = params.length;
       return `($${o - 8}, $${o - 7}, $${o - 6}, $${o - 5}, $${o - 4}, $${o - 3}, $${o - 2}, $${o - 1}, $${o}::halfvec)`;
     });
     const r = await pool.query(
       `INSERT INTO "clic_chunks" ("nid","chunk_no","language_code","title","content","url","topic","context","embedding") VALUES ${tuples.join(', ')} ON CONFLICT ("nid","language_code","chunk_no") DO NOTHING`, params);
     counts.clic += r.rowCount;
-    log(`  clic ${Math.min(i + 100, clic.length)}/${clic.length} (+${r.rowCount})`);
+    log(`  clic-${lang} ${Math.min(i + 100, clic.length)}/${clic.length} (+${r.rowCount})`);
+  }
   }
 
   // --- judgment_chunks ---

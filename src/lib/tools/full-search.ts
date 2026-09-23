@@ -233,11 +233,16 @@ export const fullSearchTool = tool({
 						| { kind: "clic"; hit: ClicChunkHit }
 						| { kind: "judgment"; hit: JudgmentChunkHit }
 						| { kind: "legislation"; section: FullSearchGraphSection };
+					// RRF order upfront: applyRerank does not throw when rerank is
+					// disabled/failing (it returns items.slice(0, topN)), so without this
+					// the top 10 would always be CLIC hits. Rerank itself is order-independent.
+					const poolRrf = (candidate: FullSearchPoolItem): number =>
+						candidate.kind === "legislation" ? Number.NEGATIVE_INFINITY : (candidate.hit.rrf_score ?? 0);
 					const pool: FullSearchPoolItem[] = [
 						...clicMerged.map((hit): FullSearchPoolItem => ({ kind: "clic", hit })),
 						...judgmentMerged.map((hit): FullSearchPoolItem => ({ kind: "judgment", hit })),
 						...graphSections.map((section): FullSearchPoolItem => ({ kind: "legislation", section })),
-					];
+					].sort((a, b) => poolRrf(b) - poolRrf(a));
 					const poolText = (candidate: FullSearchPoolItem): string => {
 						if (candidate.kind === "clic") return candidate.hit.content;
 						if (candidate.kind === "judgment") return candidate.hit.content;
@@ -259,9 +264,7 @@ export const fullSearchTool = tool({
 							);
 							ranked = reranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
 						} catch {
-							// Rerank unavailable: fusion order (graph items have no rrf_score, so they sink).
-							const poolRrf = (candidate: FullSearchPoolItem): number =>
-								candidate.kind === "legislation" ? Number.NEGATIVE_INFINITY : (candidate.hit.rrf_score ?? 0);
+							// Rerank unavailable: pool is already in fusion order (graph items sink).
 							ranked = [...pool]
 								.sort((a, b) => poolRrf(b) - poolRrf(a))
 								.slice(0, FULL_SEARCH_TOP_N)

@@ -178,7 +178,14 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
                 key={message.id}
                 message={message}
                 onAnswerQuestion={(toolCallId, output) =>
-                  addToolResult({ tool: "ask_question", toolCallId, output })
+                  addToolResult({
+                    tool: "ask_question",
+                    toolCallId,
+                    output,
+                    // The auto-resubmit must carry the same request settings,
+                    // or the route falls back to defaults and can switch mode mid-run.
+                    options: { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                  })
                 }
                 // groundings={messages[messages.length - 1]?.metadata?.groundings}
                 ref={(node: HTMLElement | null) => {

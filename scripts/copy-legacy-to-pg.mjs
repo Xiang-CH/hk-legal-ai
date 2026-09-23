@@ -53,7 +53,10 @@ async function copyEntity(conn, table, columns) {
   if (total === 0) return 0;
   const { rows: existing } = await pool.query(`SELECT COUNT(*)::int AS n FROM ${esc(table)}`);
   if (existing[0].n > 0 && !RESUME) throw new Error(`${table} not empty (${existing[0].n}) — aborting. Use --resume to skip filled tables.`);
-  if (existing[0].n > 0) { log(`  resume: already has ${existing[0].n}, skipping`); return existing[0].n; }
+  if (existing[0].n > 0) {
+    if (existing[0].n !== total) throw new Error(`${table} partially filled (${existing[0].n}/${total}) — truncate and re-run`);
+    log(`  resume: already has ${existing[0].n}, skipping`); return total;
+  }
   const colList = columns.map(esc).join(', ');
   const selectList = columns.map((c) => `[${c}]`).join(', ');
   let lastId = 0, done = 0;
@@ -80,7 +83,10 @@ async function copyJunction(conn, table) {
   if (total === 0) return 0;
   const { rows: existing } = await pool.query(`SELECT COUNT(*)::int AS n FROM ${esc(table)}`);
   if (existing[0].n > 0 && !RESUME) throw new Error(`${table} not empty — aborting.`);
-  if (existing[0].n > 0) { log(`  resume: already has ${existing[0].n}, skipping`); return existing[0].n; }
+  if (existing[0].n > 0) {
+    if (existing[0].n !== total) throw new Error(`${table} partially filled (${existing[0].n}/${total}) — truncate and re-run`);
+    log(`  resume: already has ${existing[0].n}, skipping`); return total;
+  }
   const colList = cols.map(esc).join(', ');
   let done = 0, offset = 0;
   for (;;) {
@@ -114,11 +120,16 @@ try {
     await pool.query(`SELECT setval(pg_get_serial_sequence(${lit('"' + table_name + '"')}, ${lit(column_name)}), (SELECT MAX(${esc(column_name)}) FROM ${esc(table_name)}))`);
     log(`sequence fixed: ${table_name}.${column_name}`);
   }
-  // Verify
+  // Verify pg counts against the legacy source totals (counts[t] is the source total,
+  // including resume runs). Any mismatch fails the script.
+  let verifyOk = true;
   for (const t of [...ENTITY_TABLES, ...JUNCTION_TABLES]) {
     const r = await pool.query(`SELECT COUNT(*)::int AS n FROM ${esc(t)}`);
-    log(`VERIFY ${t}: pg=${r.rows[0].n} (copied ${counts[t] ?? '?'})`);
+    const ok = r.rows[0].n === counts[t];
+    if (!ok) verifyOk = false;
+    log(`VERIFY ${t}: pg=${r.rows[0].n} (source ${counts[t] ?? '?'}) ${ok ? 'OK' : 'MISMATCH'}`);
   }
+  if (!verifyOk) throw new Error('VERIFY_FAILED: pg counts do not match legacy source totals');
 } catch (e) {
   console.error('COPY_FAILED:', e.message);
   process.exitCode = 1;

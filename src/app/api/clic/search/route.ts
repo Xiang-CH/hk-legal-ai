@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getEmbeddings, searchClic } from "@/app/api/chat/helper";
 
@@ -7,6 +8,10 @@ import { getEmbeddings, searchClic } from "@/app/api/chat/helper";
  * adds its own score in the chat flow). languageCode sc/tc now served via
  * language lanes (old 501 removed). Fusion returns top-30; top/skip slice it. */
 const FUSION_CAP = 30;
+const paginationSchema = z.object({
+	top: z.number().int().min(0).nullish(),
+	skip: z.number().int().min(0).nullish(),
+});
 
 export async function POST(request: Request) {
     try {
@@ -24,8 +29,12 @@ export async function POST(request: Request) {
             return new Response("Language must be one of 'en', 'sc', or 'tc'", { status: 401 });
         }
 
-        const top = Math.min(body.top ?? 10, FUSION_CAP);
-        const skip = body.skip ?? 0;
+        const pagination = paginationSchema.safeParse(body);
+        if (!pagination.success) {
+            return new Response("Invalid pagination: top/skip must be nonnegative integers", { status: 400 });
+        }
+        const top = Math.min(pagination.data.top ?? 10, FUSION_CAP);
+        const skip = pagination.data.skip ?? 0;
         // Old `filter` was a topic list for search.in(); now topic = ANY($) passthrough.
         const topics = Array.isArray(body.filter) ? body.filter : undefined;
 

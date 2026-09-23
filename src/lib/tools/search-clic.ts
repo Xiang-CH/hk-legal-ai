@@ -97,9 +97,13 @@ function resolveClicTopic(...values: Array<string | undefined>): string | null {
 async function fallbackClicOutput(args: SearchClicInput): Promise<ClicToolOutput> {
 	const topic = resolveClicTopic(args.topic, args.query);
 	const terms = fallbackSearchTerms(args.query);
+	// No matchable terms (e.g. Chinese-only or stop-word-only query): return
+	// nothing rather than the first arbitrary rows in the table.
+	if (terms.length === 0) return { results: [] };
 	const rows = await prisma.clicChunk.findMany({
 		where: {
 			...(topic ? { topic } : {}),
+			OR: terms.map((term) => ({ content: { contains: term, mode: "insensitive" } })),
 		},
 		select: {
 			nid: true,
@@ -119,6 +123,7 @@ async function fallbackClicOutput(args: SearchClicInput): Promise<ClicToolOutput
 				score: terms.reduce((total, term) => total + (searchable.includes(term) ? 1 : 0), 0),
 			};
 		})
+		.filter(({ score }) => score > 0)
 		.sort((left, right) => right.score - left.score)
 		.slice(0, RERANK_TOP_CLIC);
 	return {

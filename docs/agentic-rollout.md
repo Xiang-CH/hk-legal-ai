@@ -67,7 +67,7 @@ Assuming the test rollout starts on 2026-09-22, schedule the cleanup review for 
 At cleanup:
 
 1. Keep `AGENTIC_SEARCH_ENABLED=true` as the only supported chat search path and remove the flag toggle after deployment parity is confirmed.
-2. Delete the legacy rewrite/fan-out branch from `/Users/cxiang/Projects/clic-chat/src/app/api/chat/route.ts`.
-3. Delete `/Users/cxiang/Projects/clic-chat/src/lib/prompts/query-extend.ts` and its remaining imports.
+2. Delete the legacy rewrite/fan-out branch from `src/app/api/chat/route.ts`.
+3. Delete `src/lib/prompts/query-extend.ts` and its remaining imports.
 4. Remove legacy-only request handling and the `searchDepth` compatibility field after clients have moved to `maxSteps`.
 5. Keep `pnpm smoke:agentic` and the measurement report as the post-cutover regression gate.

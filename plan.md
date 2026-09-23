@@ -48,7 +48,7 @@ Why rebuild: the Azure index is gone, so the old `uploadIndexByBatch → searchC
 2. Re-embed, either path (spike both): **(A)** existing app batcher (`getEmbeddingsByBatch`, batch 100, `text-embedding-3-large`), per-batch JSON checkpoint (resumable); or **(B, NEW) in-DB** `UPDATE ... SET embedding = azure_openai.create_embeddings('<DEPLOYMENT>', content)::vector WHERE embedding IS NULL` (in-DB batch default 100, resumable via the `IS NULL` predicate; explicit `dimensions` only if ext ≥ 1.1.0). 100K chunks ≈ 1000+ calls either way — budget time + $$ before running.
 3. Shortcut: `index-output/chunks-en.json` (3244 chunks, embeddings present) and `judgment-summaries.json` (217) can be loaded first to get EN working early — but diff `nid/chunk_no` against freshly chunked DB rows; any missing/changed chunks go through step 2. Do NOT assume they cover sc/tc or the full corpus.
 4. Load Postgres: `COPY` chunk JSONs (fresh + cached EN) into `clic_chunks` / `judgment_chunks`, then populate `tsv` (`english` for en; `simple` + bigram `cjk_tokens` for sc/tc).
-5. **After** COPY: `CREATE INDEX ... USING hnsw (embedding vector_cosine_ops) WITH (m=16, ef_construction=64);` + `GIN(tsv)` + `GIN(content gin_trgm_ops)` per chunk table.
+5. **After** COPY: `CREATE INDEX ... USING hnsw (embedding halfvec_cosine_ops) WITH (m=16, ef_construction=64); (columns are halfvec(3072); HNSW on vector caps at 2000 dims)` + `GIN(tsv)` + `GIN(content gin_trgm_ops)` per chunk table.
 
 ## 5. Search SQL — replace Azure hybrid
 

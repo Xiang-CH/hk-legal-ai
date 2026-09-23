@@ -7,6 +7,7 @@
 import fs from 'fs';
 import path from 'path';
 import readline from 'readline';
+import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 
@@ -25,10 +26,13 @@ const client = new OpenAI({
 const MODEL = get('AZURE_OPENAI_EMBEDDING_DEPLOYMENT') || 'text-embedding-3-large';
 const dir = path.join(__dirname, 'index-output');
 
+const textHash = (text) => createHash('sha1').update(text ?? '', 'utf8').digest('hex');
 async function readJsonlIds(f) {
   const map = new Map();
   const rl = readline.createInterface({ input: fs.createReadStream(f), crlfDelay: Infinity });
-  for await (const line of rl) { if (line.trim()) { const r = JSON.parse(line); map.set(r.id, r.embedding); } }
+  // Values are { embedding, textHash }; lines without a hash predate verification
+  // and are treated as misses so stale vectors are never reused.
+  for await (const line of rl) { if (line.trim()) { const r = JSON.parse(line); map.set(r.id, r); } }
   return map;
 }
 
@@ -55,7 +59,8 @@ async function processFile({ fresh, cache, textField, batch, label }) {
     if (hit && hit.text === r[textField]) { r.embedding = hit.embedding; reused++; continue; }
     if (hit) changed++;
     const s = sideMap.get(r.id);
-    if (s) { r.embedding = s; reused++; continue; }
+    if (s?.embedding && s.textHash === textHash(r[textField])) { r.embedding = s.embedding; reused++; continue; }
+    if (s) changed++;
     todo.push(r);
   }
   log(`${label}: rows=${rows.length} reused=${reused} text_changed=${changed} pending=${todo.length}`);
@@ -63,7 +68,7 @@ async function processFile({ fresh, cache, textField, batch, label }) {
   for (let b = 0; b < todo.length; b += batch) {
     const items = todo.slice(b, b + batch);
     const res = await client.embeddings.create({ model: MODEL, input: items.map((r) => r[textField]) });
-    const lines = res.data.map((d, k) => { items[k].embedding = d.embedding; return JSON.stringify({ id: items[k].id, embedding: d.embedding }); });
+    const lines = res.data.map((d, k) => { items[k].embedding = d.embedding; return JSON.stringify({ id: items[k].id, textHash: textHash(items[k][textField]), embedding: d.embedding }); });
     fs.appendFileSync(sidecar, lines.join('\n') + '\n');
     tokens += res.usage?.prompt_tokens ?? 0;
     const n = Math.ceil((b + batch) / batch), t = Math.ceil(todo.length / batch);

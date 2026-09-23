@@ -19,7 +19,9 @@ export const FULL_SEARCH_GRAPH_CAP = 20;
 export const FULL_SEARCH_RERANK_TEXT_CHARS = 2000;
 /** Snippet length for legislation graph items (full text via get_ordinance_section). */
 export const FULL_SEARCH_LEGISLATION_SNIPPET_CHARS = 500;
-export const PRIMARY_SEARCH_BUDGET_MS = 2_500;
+// Primary covers an embedding call + pg fusion + up to RERANK_TIMEOUT_MS of rerank;
+// the substring fallback (single indexed query) needs far less, so it gets the remainder.
+export const PRIMARY_SEARCH_BUDGET_MS = 7_000;
 export const SEARCH_FALLBACK_BUDGET_MS = TOOL_TIMEOUT_MS - PRIMARY_SEARCH_BUDGET_MS - 250;
 export const RERANK_TIMEOUT_MS = 2_000;
 export const RERANK_TOP_CLIC = 10;

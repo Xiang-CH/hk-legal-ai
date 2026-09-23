@@ -133,28 +133,36 @@ export const searchLegislationTool = tool({
 								capNumber: args.capNumber,
 								...(args.sectionNumber ? { sectionNumber: args.sectionNumber } : {}),
 							},
-							select: { id: true },
+							select: {
+								id: true,
+								languageCode: true,
+								capNumber: true,
+								sectionNumber: true,
+								subsectionNumber: true,
+								sectionHeading: true,
+								content: true,
+								url: true,
+							},
 							take: 20,
 						});
 						if (direct.length === 0) {
 							return { error: `search_legislation: no sections found for Cap ${args.capNumber}${args.sectionNumber ? ` s.${args.sectionNumber}` : ""}` };
 						}
-							const capNumber = args.capNumber;
-							chunks = direct.map((d) => ({
-								sectionId: d.id,
-								chunk_no: 0,
-								languageCode: "en",
-								capNumber,
-							sectionNumber: args.sectionNumber ?? "",
-							subsectionNumber: null,
-							heading: null,
-							content: "",
-							url: "",
+						chunks = direct.map((item) => ({
+							sectionId: item.id,
+							chunk_no: 0,
+							languageCode: item.languageCode,
+							capNumber: item.capNumber,
+							sectionNumber: item.sectionNumber,
+							subsectionNumber: item.subsectionNumber,
+							heading: item.sectionHeading,
+							content: item.content,
+							url: item.url,
 							context: null,
 							lexical_rank: null,
 							vector_distance: null,
 							rrf_score: 0,
-							snippet: "",
+							snippet: item.content.slice(0, 240),
 						}));
 					}
 					const unique = dedupe(chunks, (c) => `${c.sectionId}:${c.chunk_no}`);

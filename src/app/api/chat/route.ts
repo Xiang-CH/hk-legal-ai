@@ -503,8 +503,9 @@ async function handleChatRequest(req: Request): Promise<Response> {
 	const inputText = modelMessages[modelMessages.length - 1]?.content ?? "";
 	const maxSteps = resolveMaxSteps(request.maxSteps);
 	const searchDepth = request.searchDepth ?? 2;
-	const agenticSearchEnabled =
-		request.agenticSearchEnabled ?? process.env.AGENTIC_SEARCH_ENABLED === "true";
+	const serverAgenticEnabled = process.env.AGENTIC_SEARCH_ENABLED === "true";
+	// Server flag is the upper bound (kill switch); the client may only opt out.
+	const agenticSearchEnabled = serverAgenticEnabled && (request.agenticSearchEnabled ?? true);
 	const searchMode = agenticSearchEnabled ? "agent" : "legacy";
 
 	return propagateAttributes(
