@@ -18,10 +18,19 @@ const LOGFILE = process.env.EMBED_LOG || '/tmp/embed-clic-judg-out.txt';
 const log = (...a) => { const line = a.join(' ') + '\n'; fs.appendFileSync(LOGFILE, line); console.log(...a); };
 const env = fs.readFileSync(path.join(__dirname, '../.env'), 'utf8');
 const get = (k) => (env.match(new RegExp(`^${k}="(.*)"$`, 'm')) || [])[1] || '';
+const RAW_ENDPOINT = (get('AZURE_OPENAI_ENDPOINT') || '').replace(/\/+$/, '');
+const HOST = (RAW_ENDPOINT.split('/')[2] || '');
+const IS_FOUNDRY = /\.services\.ai\.azure\.com$/i.test(HOST);
+// Foundry's OpenAI-compatible surface is already versioned at /openai/v1
+// (and rejects api-version query params); classic *.openai.azure.com
+// resources need the path appended plus api-version instead.
+const BASE_URL = IS_FOUNDRY
+  ? RAW_ENDPOINT.replace(/\/openai\/v1$/, '') + '/openai/v1/'
+  : RAW_ENDPOINT + '/openai/v1/';
 const client = new OpenAI({
   apiKey: get('AZURE_OPENAI_KEY') || undefined,
-  baseURL: (get('AZURE_OPENAI_ENDPOINT') || '') + '/openai/v1/' || undefined,
-  defaultQuery: { 'api-version': 'preview' },
+  baseURL: BASE_URL || undefined,
+  ...(IS_FOUNDRY ? {} : { defaultQuery: { 'api-version': 'preview' } }),
 });
 const MODEL = get('AZURE_OPENAI_EMBEDDING_DEPLOYMENT') || 'text-embedding-3-large';
 const dir = path.join(__dirname, 'index-output');
