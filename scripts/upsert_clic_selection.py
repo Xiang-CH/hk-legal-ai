@@ -7,8 +7,9 @@ and dry-run prints a drop report of existing edges the rebuild would remove.
 Reads the EN sheet's `nid` column (dedup key = (nid, languageCode), same as
 ClicPage @@unique) and the `2nd_id` column for the selection. No intermediate JSON needed.
 
-Selection is explicit (no defaults): --add-lo/--add-hi (2nd_id range for adds)
-and/or --update-ids (comma-separated 2nd_ids for updates).
+Selection is explicit (no defaults): --add-lo/--add-hi (2nd_id range), --update-ids
+(comma-separated 2nd_ids), and/or --all (whole sheet: new vs updated auto-detected
+by nid; Result=Delete rows skipped).
 
 Ref extraction mirrors clic-search/scripts/prepdoc.ipynb cell 26 (hklii case/legislation
 links + /topics/ CLIC links), and relation writes mirror insert-clic.ts, with fixes:
@@ -72,7 +73,7 @@ class LinkCollector(HTMLParser):
 
 # ---------------------------------------------------------------- excel
 
-def read_selection(xlsx_path, add_lo, add_hi, update_ids):
+def read_selection(xlsx_path, add_lo, add_hi, update_ids, select_all=False):
     """Returns (selected_rows, path_map). selected_rows: list of dicts with raw cells."""
     wb = openpyxl.load_workbook(xlsx_path, read_only=True, data_only=True)
     ws = wb["EN"]
@@ -83,6 +84,7 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids):
     wanted_update = set(update_ids)
     use_range = add_lo is not None and add_hi is not None
     selected, seen_second, struck = [], set(), set()
+    seen_nid = set()
     path_map = {}  # normalized trailing path -> nid (for clic_ref resolution)
     for row in it:  # single pass: values + strikethrough check together
         cells = list(row)
@@ -98,16 +100,23 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids):
         if url and "topics/" in url:
             path_map[url.split("topics/")[1].strip().strip("/").lower()] = nid
         c2 = vals[idx["second"]]
-        if c2 is None or str(c2).strip() == "":
-            continue
         try:
-            v2 = int(float(str(c2).strip()))
+            v2 = int(float(str(c2).strip())) if c2 is not None and str(c2).strip() != "" else None
         except ValueError:
-            continue
-        in_add = use_range and add_lo <= v2 <= add_hi
-        if not (in_add or v2 in wanted_update) or v2 in seen_second:
-            continue
-        seen_second.add(v2)
+            v2 = None
+        result_flag = str(vals[idx["result"]] or "").strip()
+        if select_all:
+            if nid in seen_nid:
+                continue
+            seen_nid.add(nid)
+            v2 = v2 if v2 is not None else -1
+        else:
+            if v2 is None:
+                continue
+            in_add = use_range and add_lo <= v2 <= add_hi
+            if not (in_add or v2 in wanted_update) or v2 in seen_second:
+                continue
+            seen_second.add(v2)
         if any(getattr(c.font, "strike", False) for c in cells if c.font):
             struck.add(v2)  # prepdoc parity: struck rows = removed
         selected.append({
@@ -115,6 +124,7 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids):
             "title": str(vals[idx["title"]] or "").strip(), "url": url,
             "topic_display": str(vals[idx["topic"]] or "").strip(),
             "content_html": str(vals[idx["content"]] or ""),
+            "result_flag": result_flag,
             "kind": "UPDATE" if v2 in wanted_update else "ADD",
             "struck": v2 in struck,
         })
@@ -387,20 +397,25 @@ def main():
     ap.add_argument("--require-no-drop", action="store_true",
                       help="fail closed: abort (non-zero exit) if the drop report "
                            "finds any existing edge the rebuild would remove")
+    ap.add_argument("--all", action="store_true",
+                      help="select every row with a nid (auto-detect new vs updated "
+                           "across the whole sheet) instead of a 2nd_id scope; "
+                           "rows flagged Result=Delete are still skipped")
     a = ap.parse_args()
 
     if (a.add_lo is None) != (a.add_hi is None):
         ap.error("--add-lo and --add-hi must be given together")
     update_ids = [int(x) for x in a.update_ids.split(",") if x.strip()]
-    if a.add_lo is None and not update_ids:
-        ap.error("no selection: pass --add-lo/--add-hi and/or --update-ids")
-    selected, path_map = read_selection(a.xlsx, a.add_lo, a.add_hi, update_ids)
+    if a.add_lo is None and not update_ids and not a.all:
+        ap.error("no selection: pass --add-lo/--add-hi, --update-ids, and/or --all")
+    selected, path_map = read_selection(a.xlsx, a.add_lo, a.add_hi, update_ids, a.all)
     print(f"Excel selection: {len(selected)} rows")
     scoped = []
     for s in selected:
         text = strip_html(s["content_html"])
         s["content_text"] = text
-        junk = (s["struck"] or s["url"] in ("#N/A", "None", "") or not s["url"]
+        junk = (s["struck"] or s.get("result_flag") == "Delete"
+                or s["url"] in ("#N/A", "None", "") or not s["url"]
                 or "topics/" not in s["url"] or s["title"] in ("#N/A", "") or not text)
         s["junk_reason"] = ("struck" if s["struck"] else
                             "no-topics-url" if "topics/" not in s["url"] else
