@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "postinstall": "pnpm prisma generate",
+    "postinstall": "prisma generate",
     "start": "next start",
     "lint": "eslint .",
     "smoke:agentic": "node scripts/smoke-agentic.mjs",
