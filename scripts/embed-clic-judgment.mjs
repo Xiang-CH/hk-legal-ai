@@ -23,6 +23,7 @@ let HOST = '';
 try { HOST = new URL(RAW_ENDPOINT).hostname; }
 catch { HOST = (RAW_ENDPOINT.split('/')[2] || '').split(':')[0]; }
 const IS_FOUNDRY = /\.services\.ai\.azure\.com$/i.test(HOST);
+
 // Foundry's OpenAI-compatible surface is already versioned at /openai/v1
 // (and rejects api-version query params); classic *.openai.azure.com
 // resources need the path appended plus api-version instead.
