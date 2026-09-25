@@ -2,6 +2,8 @@ import type { NextConfig } from "next";
 import { routes } from "./src/lib/routes";
 
 const nextConfig: NextConfig = {
+    // Azure SWA hybrid Next.js caps the app at 250 MB: standalone keeps it small.
+    output: "standalone",
     /* config options here */
     async redirects() {
         return [
