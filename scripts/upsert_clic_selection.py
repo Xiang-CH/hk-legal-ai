@@ -408,6 +408,8 @@ def main():
     ap.add_argument("--include-junk", action="store_true")
     ap.add_argument("--skip-refs", action="store_true", help="pages only, no ref rebuild")
     ap.add_argument("--refs-only", action="store_true", help="rebuild refs only, no page upserts")
+    ap.add_argument("--summary", action="store_true",
+                      help="print only aggregate statistics, not per-page listings")
     ap.add_argument("--require-no-drop", action="store_true",
                       help="fail closed: abort (non-zero exit) if the drop report "
                            "finds any existing edge the rebuild would remove")
@@ -465,11 +467,13 @@ def main():
             else:
                 noop += 1
         print(f"INSERT (nid not in DB): {len(to_insert)}")
-        for s in to_insert:
-            print(f"  + nid={s['nid']} 2nd={s['second_id']} | {s['title'][:70]}")
+        if not a.summary:
+            for s in to_insert:
+                print(f"  + nid={s['nid']} 2nd={s['second_id']} | {s['title'][:70]}")
         print(f"UPDATE (nid in DB, differs): {len(to_update)}")
-        for s, fields in to_update:
-            print(f"  ~ nid={s['nid']} 2nd={s['second_id']} [{'+'.join(fields)}] | {s['title'][:70]}")
+        if not a.summary:
+            for s, fields in to_update:
+                print(f"  ~ nid={s['nid']} 2nd={s['second_id']} [{'+'.join(fields)}] | {s['title'][:70]}")
         print(f"NO-OP: {noop}")
 
     # ---- refs: extract + resolve (read-only; feeds both the dry-run drop
@@ -501,8 +505,12 @@ def main():
               f"legislation={n_leg}, cases={n_cases} (reported only, no writer exists)")
         for e in ref_plan:
             unres = [r["path"] for r in e["clic"] if r["nid"] is None]
-            if unres:
+            if unres and not a.summary:
                 print(f"  nid={e['s']['nid']} unresolved clic paths: {unres[:5]}")
+        if a.summary:
+            n_unres_pages = sum(1 for e in ref_plan
+                                if any(r["nid"] is None for r in e["clic"]))
+            print(f"unresolved clic paths on {n_unres_pages} page(s)")
         missing_caps = sorted({r["no"] for e in ref_plan for r in e["leg"]} - set(cap_ids))
         if missing_caps:
             print(f"caps not in DB (no edge possible): {missing_caps[:20]}")
@@ -549,7 +557,8 @@ def main():
                 f"WHERE nid = {s['nid']} AND \"languageCode\" = {sql_lit(a.lang)};")
             stmts.append(f"DELETE FROM \"clic_chunks\" WHERE nid = {s['nid']} "
                          f"AND language_code = {sql_lit(a.lang)};")
-            print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
+            if not a.summary:
+                print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
     pp_ins = sec_ins = cap_ins = n_ref_pages = 0
     if not a.skip_refs:
         insert_set = {s["nid"] for s in to_insert} if not a.refs_only else set()
