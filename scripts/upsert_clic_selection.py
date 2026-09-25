@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Upsert targeted CLIC pages straight from the xlsx, deduplicated by `nid` against the DB,
 including a full reference-link rebuild (CLIC<->CLIC, CLIC->legislation).
+Writes run as single transactions per phase (all-or-nothing; safe to re-run),
+and dry-run prints a drop report of existing edges the rebuild would remove.
 
 Reads the EN sheet's `nid` column (dedup key = (nid, languageCode), same as
 ClicPage @@unique) and the `2nd_id` column for the selection. No intermediate JSON needed.
@@ -263,6 +265,97 @@ def section_variants(section):
 
 # ---------------------------------------------------------------- main
 
+def run_txn(dburl, stmts, label):
+    """Execute statements as ONE transaction. With ON_ERROR_STOP, any failure
+    aborts before COMMIT and the server rolls back on disconnect — callers can
+    simply re-run with no partial state left behind."""
+    if not stmts:
+        print(f"{label}: nothing to write, skipped")
+        return
+    psql(dburl, "BEGIN;\n" + "\n".join(stmts) + "\nCOMMIT;")
+    print(f"{label}: committed ({len(stmts)} statements)")
+
+def match_leg_refs(leg_list, cap_ids, sec_index):
+    """Resolve extracted legislation refs to edge targets (paired cap+section,
+    with leading-'s' fallback and cap fallback). Returns
+    (section_ids, cap_ids, dropped_labels). Shared by the drop report and the
+    apply writes so both always agree."""
+    sec_edges, cap_edges, dropped = set(), set(), []
+    for r in leg_list:
+        if not r["section"]:
+            if r["no"] in cap_ids:
+                cap_edges.add(cap_ids[r["no"]])
+            else:
+                dropped.append(f"{r['type']}:{r['no']} (cap missing)")
+            continue
+        hit = False
+        for cand in section_variants(r["section"]):
+            for sid in sec_index.get((r["no"], cand), []):
+                sec_edges.add(sid)
+                hit = True
+            if hit:
+                break
+        if not hit:
+            if r["no"] in cap_ids:
+                cap_edges.add(cap_ids[r["no"]])  # fall back to cap edge
+            else:
+                dropped.append(f"{r['type']}:{r['no']}/{r['section']} (cap+section missing)")
+    return sec_edges, cap_edges, dropped
+
+def print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids):
+    """Diff each in-scope page's EXISTING outgoing edges against the planned
+    rebuild set and print anything the rebuild would REMOVE without recreating.
+    Silent edge loss is the failure mode this guards."""
+    pids = sorted({id_map[s] for s in
+                   ([e["s"]["nid"] for e in ref_plan]) if s in id_map})
+    if not pids:
+        print("drop-report: none of the in-scope pages exist in the DB yet — nothing to lose")
+        return
+    in_list = ",".join(map(str, pids))
+    nid_of = {v: k for k, v in id_map.items()}
+    sec_label = {}
+    for (cap, sec), sids in sec_index.items():
+        for sid in sids:
+            sec_label[sid] = f"{cap}/{sec}"
+    cap_label = {v: k for k, v in cap_ids.items()}
+
+    exist_pp, exist_sec, exist_cap = {}, {}, {}
+    for parts in copy_rows(dburl, f'SELECT "B", "A" FROM "_ClicPageRelationToClicPage" '
+                                 f"WHERE \"B\" IN ({in_list})"):
+        if len(parts) == 2:
+            exist_pp.setdefault(int(parts[0]), set()).add(int(parts[1]))
+    for parts in copy_rows(dburl, f'SELECT "A", "B" FROM "_ClicPageToLegislationSection" '
+                                 f"WHERE \"A\" IN ({in_list})"):
+        if len(parts) == 2:
+            exist_sec.setdefault(int(parts[0]), set()).add(int(parts[1]))
+    for parts in copy_rows(dburl, f'SELECT "A", "B" FROM "_ClicPageToLegislationCap" '
+                                 f"WHERE \"A\" IN ({in_list})"):
+        if len(parts) == 2:
+            exist_cap.setdefault(int(parts[0]), set()).add(int(parts[1]))
+
+    total_dropped = 0
+    for e in ref_plan:
+        s = e["s"]
+        pid = id_map.get(s["nid"])
+        if pid is None:
+            continue
+        planned_pp_ids = {id_map[n] for n in e["planned_pp"] if n in id_map}
+        lost = []
+        for rid in sorted(exist_pp.get(pid, set()) - planned_pp_ids):
+            lost.append(f"page nid={nid_of.get(rid, '?')}")
+        for sid in sorted(exist_sec.get(pid, set()) - e["planned_sec"]):
+            lost.append(f"section {sec_label.get(sid, sid)}")
+        for cid in sorted(exist_cap.get(pid, set()) - e["planned_cap"]):
+            lost.append(f"cap {cap_label.get(cid, cid)}")
+        if lost:
+            total_dropped += len(lost)
+            print(f"  nid={s['nid']} rebuild would DROP {len(lost)} existing edge(s): {lost[:8]}")
+    if not total_dropped:
+        print("drop-report: rebuild recreates every existing edge — nothing lost")
+    else:
+        print(f"drop-report: {total_dropped} existing edge(s) would be dropped "
+              f"(unresolved targets) — review before --apply")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", default="/Users/cxiang/Downloads/CLIC Content List_20260924.xlsx")
@@ -326,103 +419,106 @@ def main():
             print(f"  ~ nid={s['nid']} 2nd={s['second_id']} [{'+'.join(fields)}] | {s['title'][:70]}")
         print(f"NO-OP: {noop}")
 
-    # ---- refs
-    ref_plan = []
+    # ---- refs: extract + resolve (read-only; feeds both the dry-run drop
+    # report and the apply writes)
+    ref_plan = []  # (s, clic, leg, cases, planned_pp, planned_sec, planned_cap, dropped_leg)
+    id_map, cap_ids, sec_index = {}, {}, {}
     if not a.skip_refs:
         for s in scoped:
             clic, leg, cases = extract_refs(s["content_html"], path_map)
-            ref_plan.append((s, clic, leg, cases))
-        n_clic = sum(len(c) for _, c, _, _ in ref_plan)
-        n_clic_ok = sum(1 for _, c, _, _ in ref_plan for r in c if r["nid"] is not None)
-        n_leg = sum(len(l) for _, _, l, _ in ref_plan)
-        n_cases = sum(len(k) for _, _, _, k in ref_plan)
+            ref_plan.append({"s": s, "clic": clic, "leg": leg, "cases": cases})
+        all_nids = [s["nid"] for s in scoped]
+        all_nids += [r["nid"] for e in ref_plan for r in e["clic"] if r["nid"] is not None]
+        id_map = fetch_ids(dburl, a.lang, all_nids)
+        caps_needed = {r["no"] for e in ref_plan for r in e["leg"]}
+        cap_ids, sections = fetch_leg(dburl, a.lang, caps_needed)
+        for sid, cap, sec in sections:
+            sec_index.setdefault((cap, sec), []).append(sid)
+        for e in ref_plan:
+            sec_edges, cap_edges, dropped = match_leg_refs(e["leg"], cap_ids, sec_index)
+            e["planned_pp"] = {r["nid"] for r in e["clic"] if r["nid"] is not None}
+            e["planned_sec"] = sec_edges
+            e["planned_cap"] = cap_edges
+            e["dropped_leg"] = dropped
+        n_clic = sum(len(e["clic"]) for e in ref_plan)
+        n_clic_ok = sum(1 for e in ref_plan for r in e["clic"] if r["nid"] is not None)
+        n_leg = sum(len(e["leg"]) for e in ref_plan)
+        n_cases = sum(len(e["cases"]) for e in ref_plan)
         print(f"REFS extracted: clic={n_clic} (resolved {n_clic_ok}, unresolved {n_clic - n_clic_ok}), "
               f"legislation={n_leg}, cases={n_cases} (reported only, no writer exists)")
-        for s, clic, leg, cases in ref_plan:
-            unres = [r["path"] for r in clic if r["nid"] is None]
+        for e in ref_plan:
+            unres = [r["path"] for r in e["clic"] if r["nid"] is None]
             if unres:
-                print(f"  nid={s['nid']} unresolved clic paths: {unres[:5]}")
+                print(f"  nid={e['s']['nid']} unresolved clic paths: {unres[:5]}")
+        missing_caps = sorted({r["no"] for e in ref_plan for r in e["leg"]} - set(cap_ids))
+        if missing_caps:
+            print(f"caps not in DB (no edge possible): {missing_caps[:20]}")
+        for e in ref_plan:
+            if e["dropped_leg"]:
+                print(f"  nid={e['s']['nid']} leg refs resolving to nothing: {e['dropped_leg'][:8]}")
+        print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids)
 
     if not a.apply:
         print("dry-run — no writes. Re-run with --apply to write.")
         return
 
+    # ---- apply: pages (ONE transaction: update + chunk-clear are atomic,
+    # so a crash can never leave new content with stale chunks)
     if not a.refs_only:
+        stmts = []
         for s in to_insert:
             tkey = topic_key_from_url(s["url"]) or s["topic_display"]
-            psql(dburl,
-                 "INSERT INTO \"ClicPage\" (nid, title, content, topic, \"languageCode\", url, path, "
-                 "\"contextualInformation\", \"lastUpdatedAt\") VALUES ("
-                 f"{s['nid']}, {sql_lit(s['title'])}, {sql_lit(s['content_text'])}, "
-                 f"{sql_lit(tkey)}, {sql_lit(a.lang)}, {sql_lit(s['url'])}, "
-                 f"{sql_lit(s['url'].replace('https://clic.org.hk', '') if s['url'].startswith('http') else s['url'])}, "
-                 f"{sql_lit(s['topic_display'])}, NOW());")
+            pth = s["url"].replace("https://clic.org.hk", "") if s["url"].startswith("http") else s["url"]
+            stmts.append(
+                "INSERT INTO \"ClicPage\" (nid, title, content, topic, \"languageCode\", url, path, "
+                "\"contextualInformation\", \"lastUpdatedAt\") VALUES ("
+                f"{s['nid']}, {sql_lit(s['title'])}, {sql_lit(s['content_text'])}, "
+                f"{sql_lit(tkey)}, {sql_lit(a.lang)}, {sql_lit(s['url'])}, "
+                f"{sql_lit(pth)}, {sql_lit(s['topic_display'])}, NOW());")
         for s, fields in to_update:
-            psql(dburl,
-                 f"UPDATE \"ClicPage\" SET title = {sql_lit(s['title'])}, url = {sql_lit(s['url'])}, "
-                 f"path = {sql_lit(s['url'].replace('https://clic.org.hk', '') if s['url'].startswith('http') else s['url'])}, "
-                 f"content = {sql_lit(s['content_text'])}, \"lastUpdatedAt\" = NOW() "
-                 f"WHERE nid = {s['nid']} AND \"languageCode\" = {sql_lit(a.lang)};")
-            psql(dburl, f"DELETE FROM \"clic_chunks\" WHERE nid = {s['nid']} "
-                        f"AND language_code = {sql_lit(a.lang)};")
-            print(f"updated nid={s['nid']} ({','.join(fields)}), stale chunks cleared")
-        print(f"pages done: created={len(to_insert)} updated={len(to_update)}")
+            pth = s["url"].replace("https://clic.org.hk", "") if s["url"].startswith("http") else s["url"]
+            stmts.append(
+                f"UPDATE \"ClicPage\" SET title = {sql_lit(s['title'])}, url = {sql_lit(s['url'])}, "
+                f"path = {sql_lit(pth)}, content = {sql_lit(s['content_text'])}, "
+                f"\"lastUpdatedAt\" = NOW() "
+                f"WHERE nid = {s['nid']} AND \"languageCode\" = {sql_lit(a.lang)};")
+            stmts.append(f"DELETE FROM \"clic_chunks\" WHERE nid = {s['nid']} "
+                         f"AND language_code = {sql_lit(a.lang)};")
+            print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
+        run_txn(dburl, stmts, f"pages (created={len(to_insert)} updated={len(to_update)})")
 
+    # ---- apply: refs (ONE transaction: per-page delete+recreate is atomic,
+    # so a crash can never leave half-rebuilt edges; re-runs are idempotent)
     if not a.skip_refs:
         all_nids = [s["nid"] for s in scoped]
-        all_nids += [r["nid"] for s, clic, _, _ in ref_plan for r in clic if r["nid"] is not None]
-        id_map = fetch_ids(dburl, a.lang, all_nids)
-        caps_needed = set()
-        for _, _, leg, _ in ref_plan:
-            for r in leg:
-                caps_needed.add(r["no"])
-        cap_ids, sections = fetch_leg(dburl, a.lang, caps_needed)
-        sec_index = {}
-        for sid, cap, sec in sections:
-            sec_index.setdefault((cap, sec), []).append(sid)
-        missing_caps = sorted(c for c in caps_needed if c not in cap_ids)
-        if missing_caps:
-            print(f"caps not in DB (skipped): {missing_caps[:20]}")
-        pp_ins, sec_ins, cap_ins = 0, 0, 0
-        for s, clic, leg, _ in ref_plan:
+        all_nids += [r["nid"] for e in ref_plan for r in e["clic"] if r["nid"] is not None]
+        id_map = fetch_ids(dburl, a.lang, all_nids)  # refresh: inserts now have ids
+        stmts, pp_ins, sec_ins, cap_ins = [], 0, 0, 0
+        for e in ref_plan:
+            s = e["s"]
             pid = id_map.get(s["nid"])
             if pid is None:
                 print(f"  nid={s['nid']} has no DB id, refs skipped")
                 continue
-            stmts = [f"DELETE FROM \"_ClicPageRelationToClicPage\" WHERE \"B\" = {pid};"]
-            for r in clic:
-                rid = id_map.get(r["nid"]) if r["nid"] is not None else None
+            stmts.append(f"DELETE FROM \"_ClicPageRelationToClicPage\" WHERE \"B\" = {pid};")
+            for rnid in sorted(e["planned_pp"]):
+                rid = id_map.get(rnid)
                 if rid is not None:
                     stmts.append(f"INSERT INTO \"_ClicPageRelationToClicPage\" (\"A\", \"B\") "
                                  f"VALUES ({rid}, {pid}) ON CONFLICT DO NOTHING;")
                     pp_ins += 1
-            sec_edges, cap_edges = set(), set()
-            for r in leg:
-                if not r["section"]:
-                    if r["no"] in cap_ids:
-                        cap_edges.add(cap_ids[r["no"]])
-                    continue
-                hit = False
-                for cand in section_variants(r["section"]):
-                    for sid in sec_index.get((r["no"], cand), []):
-                        sec_edges.add(sid)
-                        hit = True
-                    if hit:
-                        break
-                if not hit and r["no"] in cap_ids:
-                    cap_edges.add(cap_ids[r["no"]])  # fall back to cap edge
             stmts.append(f"DELETE FROM \"_ClicPageToLegislationSection\" WHERE \"A\" = {pid};")
             stmts.append(f"DELETE FROM \"_ClicPageToLegislationCap\" WHERE \"A\" = {pid};")
-            for sid in sorted(sec_edges):
+            for sid in sorted(e["planned_sec"]):
                 stmts.append(f"INSERT INTO \"_ClicPageToLegislationSection\" (\"A\", \"B\") "
                              f"VALUES ({pid}, {sid}) ON CONFLICT DO NOTHING;")
                 sec_ins += 1
-            for cid in sorted(cap_edges):
+            for cid in sorted(e["planned_cap"]):
                 stmts.append(f"INSERT INTO \"_ClicPageToLegislationCap\" (\"A\", \"B\") "
                              f"VALUES ({pid}, {cid}) ON CONFLICT DO NOTHING;")
                 cap_ins += 1
-            psql(dburl, "\n".join(stmts))
-        print(f"refs done: page-page edges={pp_ins}, section edges={sec_ins}, cap edges={cap_ins}")
+        run_txn(dburl, stmts,
+                f"refs (page-page={pp_ins} section={sec_ins} cap={cap_ins})")
     print("done. Next: re-chunk + embed + load these nids.")
 
 if __name__ == "__main__":
