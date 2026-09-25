@@ -8,7 +8,7 @@ import { useScroll } from "@/hooks/use-scroll-to-bottom";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from '@ai-sdk/react'
-import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
+import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
@@ -18,6 +18,7 @@ import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
 import { MyUIMessage } from "@/lib/types";
+import { routes } from "@/lib/routes";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
@@ -87,6 +88,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     status,
     stop
   } = useChat<MyUIMessage>({
+    transport: new DefaultChatTransport({ api: routes.apiChat }),
     throttle: 50,
     // Resumes the agent after the user answers an ask_question tool call.
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,

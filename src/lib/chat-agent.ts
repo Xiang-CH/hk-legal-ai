@@ -1,6 +1,6 @@
 import { ToolLoopAgent, stepCountIs } from "ai";
 
-import { azure } from "@/app/api/chat/helper";
+import { azure } from "@/lib/clic-api";
 import { searchPrompt } from "@/lib/prompts";
 import { searchTools } from "@/lib/tools";
 

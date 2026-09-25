@@ -3,7 +3,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { searchClicChunks, type ClicChunkHit } from "@/lib/pg-search";
 import { containsCjk } from "@/lib/cjk";
-import { getEmbeddings } from "@/app/api/chat/helper";
+import { getEmbeddings } from "@/lib/clic-api";
 import {
 	TOOL_TIMEOUT_MS,
 	RERANK_TOP_CLIC,

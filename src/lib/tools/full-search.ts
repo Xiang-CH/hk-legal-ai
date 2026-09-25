@@ -7,7 +7,7 @@ import {
 	type ClicChunkHit,
 	type JudgmentChunkHit,
 } from "@/lib/pg-search";
-import { getEmbeddings } from "@/app/api/chat/helper";
+import { getEmbeddings } from "@/lib/clic-api";
 import { applyRerank } from "@/lib/rerank";
 import {
 	TOOL_TIMEOUT_MS,
