@@ -14,7 +14,7 @@
     "db:push": "prisma db push",
     "db:format": "prisma format",
     "db:studio": "prisma studio",
-    "upsert-clic": "uvx --with openpyxl python scripts/upsert_clic_selection.py"
+    "upsert-clic": "uvx --with openpyxl --with markdownify python scripts/upsert_clic_selection.py"
   },
   "dependencies": {
     "@ai-sdk/azure": "4.0.76",

@@ -2,7 +2,7 @@ import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { searchJudgmentChunks, type JudgmentChunkHit } from "@/lib/pg-search";
-import { getEmbeddings } from "@/app/api/chat/helper";
+import { getEmbeddings } from "@/lib/clic-api";
 import {
 	TOOL_TIMEOUT_MS,
 	RERANK_TOP_JUDGMENT,

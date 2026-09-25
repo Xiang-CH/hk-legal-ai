@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getEmbeddings, searchClic } from "@/app/api/chat/helper";
+import { getEmbeddings, searchClic } from "@/lib/clic-api";
 
 // Never statically prerender: handlers need runtime env (DATABASE_URL, API keys).
 export const dynamic = "force-dynamic";
