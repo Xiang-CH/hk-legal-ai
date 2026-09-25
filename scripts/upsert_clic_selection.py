@@ -345,6 +345,9 @@ def print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids):
     Silent edge loss is the failure mode this guards."""
     pids = sorted({id_map[s] for s in
                    ([e["s"]["nid"] for e in ref_plan]) if s in id_map})
+    if not ref_plan:
+        print("drop-report: ref scope is empty — nothing to check")
+        return 0
     if not pids:
         print("drop-report: none of the in-scope pages exist in the DB yet — nothing to lose")
         return 0
@@ -408,6 +411,9 @@ def main():
     ap.add_argument("--include-junk", action="store_true")
     ap.add_argument("--skip-refs", action="store_true", help="pages only, no ref rebuild")
     ap.add_argument("--refs-only", action="store_true", help="rebuild refs only, no page upserts")
+    ap.add_argument("--insert-only", action="store_true",
+                      help="insert new pages only; existing rows (and their refs/chunks) "
+                           "are left untouched")
     ap.add_argument("--summary", action="store_true",
                       help="print only aggregate statistics, not per-page listings")
     ap.add_argument("--require-no-drop", action="store_true",
@@ -475,6 +481,8 @@ def main():
             for s, fields in to_update:
                 print(f"  ~ nid={s['nid']} 2nd={s['second_id']} [{'+'.join(fields)}] | {s['title'][:70]}")
         print(f"NO-OP: {noop}")
+        if a.insert_only and to_update:
+            print(f"insert-only: {len(to_update)} update(s) would be skipped")
 
     # ---- refs: extract + resolve (read-only; feeds both the dry-run drop
     # report and the apply writes)
@@ -491,6 +499,10 @@ def main():
         cap_ids, sections = fetch_leg(dburl, a.lang, caps_needed)
         for sid, cap, sec in sections:
             sec_index.setdefault((cap, sec), []).append(sid)
+        if a.insert_only:
+            before = len(ref_plan)
+            ref_plan = [e for e in ref_plan if e["s"]["nid"] not in id_map]
+            print(f"insert-only: refs scoped to {len(ref_plan)} new page(s) (was {before})")
         for e in ref_plan:
             sec_edges, cap_edges, dropped = match_leg_refs(e["leg"], cap_ids, sec_index)
             e["planned_pp"] = {r["nid"] for r in e["clic"] if r["nid"] is not None}
@@ -537,6 +549,8 @@ def main():
                 f'AND "languageCode" = {sql_lit(a.lang)})')
 
     stmts, n_ins, n_upd = [], 0, 0
+    if a.insert_only and to_update:
+        print(f"insert-only: skipping {len(to_update)} update(s), chunks and refs untouched")
     if not a.refs_only:
         for s in to_insert:
             tkey = topic_key_from_url(s["url"]) or s["topic_display"]
@@ -548,7 +562,7 @@ def main():
                 f"{sql_lit(tkey)}, {sql_lit(a.lang)}, {sql_lit(s['url'])}, "
                 f"{sql_lit(pth)}, {sql_lit(s['topic_display'])}, NOW());")
             n_ins += 1
-        for s, fields in to_update:
+        for s, fields in ([] if a.insert_only else to_update):
             pth = s["url"].replace("https://clic.org.hk", "") if s["url"].startswith("http") else s["url"]
             stmts.append(
                 f"UPDATE \"ClicPage\" SET title = {sql_lit(s['title'])}, url = {sql_lit(s['url'])}, "
