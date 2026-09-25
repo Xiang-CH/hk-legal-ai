@@ -25,6 +25,9 @@ import {
 } from "@langfuse/tracing";
 import { langfuseSpanProcessor } from "@/instrumentation";
 
+// Never statically prerender: handlers need runtime env (DATABASE_URL, API keys).
+export const dynamic = "force-dynamic";
+
 /* T10: single-pg backend — pg fusion (helper.ts) + app-side Cohere rerank. */
 
 /* T09: candidates per corpus entering the single global rerank call (cost + 429 bound). */
