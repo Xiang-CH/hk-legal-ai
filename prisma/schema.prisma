@@ -5,6 +5,7 @@ generator client {
   provider        = "prisma-client-js"
   previewFeatures = ["driverAdapters"]
   output          = "../src/prisma/client"
+  binaryTargets   = ["native", "debian-openssl-3.0.x"]
 }
 
 generator dbml {
