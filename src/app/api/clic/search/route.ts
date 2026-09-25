@@ -2,6 +2,9 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getEmbeddings, searchClic } from "@/app/api/chat/helper";
 
+// Never statically prerender: handlers need runtime env (DATABASE_URL, API keys).
+export const dynamic = "force-dynamic";
+
 /* T10: pg fusion replaces Azure AI Search. Same {results, clicPages} contract;
  * `score` carries rrf_score, `caption` carries the ts_headline snippet.
  * per plan.md §7: pg layer drops rerankerScore/captionHighlights (reranker
