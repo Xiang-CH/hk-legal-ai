@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Upsert targeted CLIC pages straight from the xlsx, deduplicated by `nid` against the DB,
 including a full reference-link rebuild (CLIC<->CLIC, CLIC->legislation).
+Content is converted exactly like prepdoc.ipynb (header strip + markdownify +
+newline normalization), so updates compare markdown-vs-markdown.
 Writes run as single transactions per phase (all-or-nothing; safe to re-run),
 and dry-run prints a drop report of existing edges the rebuild would remove.
 
@@ -32,6 +34,10 @@ try:
     import openpyxl
 except ImportError:
     sys.exit("openpyxl is required (uvx --with openpyxl provides it).")
+try:
+    from markdownify import markdownify
+except ImportError:
+    sys.exit("markdownify is required (uvx --with markdownify provides it).")
 
 COLS = {"nid": "nid", "second": "2nd_id", "title": "title", "url": "full_path",
         "topic": "topic", "content": "content", "result": "Result", "included": "Included?"}
@@ -48,9 +54,17 @@ def load_dotenv(path):
                 vals[k.strip()] = v.strip().strip('"').strip("'")
     return vals
 
-def strip_html(s):
-    t = re.sub(r"<[^>]+>", " ", s or "")
-    return re.sub(r"\s+", " ", html.unescape(t)).strip()
+def normalize_newlines(text):
+    # prepdoc.ipynb: 2+ consecutive newlines -> exactly two
+    return re.sub(r"(\s*\n\s*){2,}", "\n\n", text)
+
+def parse_content(content_html):
+    """prepdoc.ipynb parity: drop the <h2> header line, convert to markdown,
+    normalize newlines. Stored into ClicPage.content, so the compare against
+    existing rows is markdown-vs-markdown and only real edits flag updates."""
+    parts = (content_html or "").split("</h2>", maxsplit=1)
+    no_header = parts[1].strip() if len(parts) > 1 else (content_html or "")
+    return normalize_newlines(markdownify(no_header).strip())
 
 def norm(s):
     return re.sub(r"\s+", " ", s or "").strip()
@@ -412,7 +426,7 @@ def main():
     print(f"Excel selection: {len(selected)} rows")
     scoped = []
     for s in selected:
-        text = strip_html(s["content_html"])
+        text = parse_content(s["content_html"])
         s["content_text"] = text
         junk = (s["struck"] or s.get("result_flag") == "Delete"
                 or s["url"] in ("#N/A", "None", "") or not s["url"]
