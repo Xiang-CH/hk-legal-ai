@@ -97,7 +97,7 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids, select_all=False):
     idx = {k: h.index(v) for k, v in COLS.items()}
     wanted_update = set(update_ids)
     use_range = add_lo is not None and add_hi is not None
-    selected, seen_second, struck = [], set(), set()
+    selected, seen_second = [], set()
     seen_nid = set()
     path_map = {}  # normalized trailing path -> nid (for clic_ref resolution)
     for row in it:  # single pass: values + strikethrough check together
@@ -131,8 +131,13 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids, select_all=False):
             if not (in_add or v2 in wanted_update) or v2 in seen_second:
                 continue
             seen_second.add(v2)
-        if any(getattr(c.font, "strike", False) for c in cells if c.font):
-            struck.add(v2)  # prepdoc parity: struck rows = removed
+            if nid in seen_nid:
+                print(f"  duplicate nid={nid} at 2nd_id={v2} skipped", file=sys.stderr)
+                continue
+            seen_nid.add(nid)
+        # prepdoc parity: struck rows = removed. Per-row (not keyed by id:
+        # blank-2nd_id rows share v2=-1, so a shared key would taint them all).
+        row_struck = any(getattr(c.font, "strike", False) for c in cells if c.font)
         selected.append({
             "second_id": v2, "nid": nid,
             "title": str(vals[idx["title"]] or "").strip(), "url": url,
@@ -140,7 +145,7 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids, select_all=False):
             "content_html": str(vals[idx["content"]] or ""),
             "result_flag": result_flag,
             "kind": "UPDATE" if v2 in wanted_update else "ADD",
-            "struck": v2 in struck,
+            "struck": row_struck,
         })
     return selected, path_map
 
@@ -407,7 +412,9 @@ def main():
                       help="2nd_id range end for adds (requires --add-lo)")
     ap.add_argument("--update-ids", default="",
                       help="comma-separated 2nd_ids for updates, e.g. 1,2,11,14")
-    ap.add_argument("--apply", action="store_true")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--dry-run", action="store_true", help="explicit no-op: read-only, no writes (the default)")
     ap.add_argument("--include-junk", action="store_true")
     ap.add_argument("--skip-refs", action="store_true", help="pages only, no ref rebuild")
     ap.add_argument("--refs-only", action="store_true", help="rebuild refs only, no page upserts")
@@ -572,7 +579,8 @@ def main():
             stmts.append(f"DELETE FROM \"clic_chunks\" WHERE nid = {s['nid']} "
                          f"AND language_code = {sql_lit(a.lang)};")
             if not a.summary:
-                print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
+                n_upd += 1
+            print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
     pp_ins = sec_ins = cap_ins = n_ref_pages = 0
     if not a.skip_refs:
         insert_set = {s["nid"] for s in to_insert} if not a.refs_only else set()
