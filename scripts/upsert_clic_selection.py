@@ -7,7 +7,8 @@ and dry-run prints a drop report of existing edges the rebuild would remove.
 Reads the EN sheet's `nid` column (dedup key = (nid, languageCode), same as
 ClicPage @@unique) and the `2nd_id` column for the selection. No intermediate JSON needed.
 
-Selection (defaults): 2nd_id 2674-2758 (adds) + 2nd_id 1,2,11,14 (updates).
+Selection is explicit (no defaults): --add-lo/--add-hi (2nd_id range for adds)
+and/or --update-ids (comma-separated 2nd_ids for updates).
 
 Ref extraction mirrors clic-search/scripts/prepdoc.ipynb cell 26 (hklii case/legislation
 links + /topics/ CLIC links), and relation writes mirror insert-clic.ts, with fixes:
@@ -80,6 +81,7 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids):
     h = [str(c).strip() if c is not None else "" for c in header]
     idx = {k: h.index(v) for k, v in COLS.items()}
     wanted_update = set(update_ids)
+    use_range = add_lo is not None and add_hi is not None
     selected, seen_second, struck = [], set(), set()
     path_map = {}  # normalized trailing path -> nid (for clic_ref resolution)
     for row in it:  # single pass: values + strikethrough check together
@@ -102,7 +104,8 @@ def read_selection(xlsx_path, add_lo, add_hi, update_ids):
             v2 = int(float(str(c2).strip()))
         except ValueError:
             continue
-        if not ((add_lo <= v2 <= add_hi) or v2 in wanted_update) or v2 in seen_second:
+        in_add = use_range and add_lo <= v2 <= add_hi
+        if not (in_add or v2 in wanted_update) or v2 in seen_second:
             continue
         seen_second.add(v2)
         if any(getattr(c.font, "strike", False) for c in cells if c.font):
@@ -265,14 +268,24 @@ def section_variants(section):
 
 # ---------------------------------------------------------------- main
 
-def run_txn(dburl, stmts, label):
-    """Execute statements as ONE transaction. With ON_ERROR_STOP, any failure
+def run_script(dburl, stmts, label):
+    """Execute statements as ONE transaction fed to psql via stdin (no OS argv
+    limit, however large the selection). With ON_ERROR_STOP, any failure
     aborts before COMMIT and the server rolls back on disconnect — callers can
     simply re-run with no partial state left behind."""
+    import subprocess as _sp
     if not stmts:
         print(f"{label}: nothing to write, skipped")
         return
-    psql(dburl, "BEGIN;\n" + "\n".join(stmts) + "\nCOMMIT;")
+    psql_bin = shutil.which("psql")
+    if not psql_bin:
+        sys.exit("psql not found on PATH")
+    env = dict(os.environ, DATABASE_URL=dburl)
+    script = "BEGIN;\n" + "\n".join(stmts) + "\nCOMMIT;\n"
+    r = _sp.run([psql_bin, dburl, "-X", "-q", "-v", "ON_ERROR_STOP=1"],
+                input=script, capture_output=True, text=True, env=env)
+    if r.returncode != 0:
+        sys.exit(f"{label}: FAILED, rolled back: {r.stderr.strip()[:500]}")
     print(f"{label}: committed ({len(stmts)} statements)")
 
 def match_leg_refs(leg_list, cap_ids, sec_index):
@@ -310,7 +323,7 @@ def print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids):
                    ([e["s"]["nid"] for e in ref_plan]) if s in id_map})
     if not pids:
         print("drop-report: none of the in-scope pages exist in the DB yet — nothing to lose")
-        return
+        return 0
     in_list = ",".join(map(str, pids))
     nid_of = {v: k for k, v in id_map.items()}
     sec_label = {}
@@ -355,21 +368,32 @@ def print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids):
     else:
         print(f"drop-report: {total_dropped} existing edge(s) would be dropped "
               f"(unresolved targets) — review before --apply")
+    return total_dropped
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", default="/Users/cxiang/Downloads/CLIC Content List_20260924.xlsx")
     ap.add_argument("--lang", default="en")
-    ap.add_argument("--add-lo", type=int, default=2674)
-    ap.add_argument("--add-hi", type=int, default=2758)
-    ap.add_argument("--update-ids", default="1,2,11,14")
+    ap.add_argument("--add-lo", type=int, default=None,
+                      help="2nd_id range start for adds (requires --add-hi)")
+    ap.add_argument("--add-hi", type=int, default=None,
+                      help="2nd_id range end for adds (requires --add-lo)")
+    ap.add_argument("--update-ids", default="",
+                      help="comma-separated 2nd_ids for updates, e.g. 1,2,11,14")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--include-junk", action="store_true")
     ap.add_argument("--skip-refs", action="store_true", help="pages only, no ref rebuild")
     ap.add_argument("--refs-only", action="store_true", help="rebuild refs only, no page upserts")
+    ap.add_argument("--require-no-drop", action="store_true",
+                      help="fail closed: abort (non-zero exit) if the drop report "
+                           "finds any existing edge the rebuild would remove")
     a = ap.parse_args()
 
+    if (a.add_lo is None) != (a.add_hi is None):
+        ap.error("--add-lo and --add-hi must be given together")
     update_ids = [int(x) for x in a.update_ids.split(",") if x.strip()]
+    if a.add_lo is None and not update_ids:
+        ap.error("no selection: pass --add-lo/--add-hi and/or --update-ids")
     selected, path_map = read_selection(a.xlsx, a.add_lo, a.add_hi, update_ids)
     print(f"Excel selection: {len(selected)} rows")
     scoped = []
@@ -456,16 +480,27 @@ def main():
         for e in ref_plan:
             if e["dropped_leg"]:
                 print(f"  nid={e['s']['nid']} leg refs resolving to nothing: {e['dropped_leg'][:8]}")
-        print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids)
+        drops = print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids)
+        if drops and a.require_no_drop:
+            sys.exit(f"aborting: --require-no-drop set with {drops} edge(s) "
+                     f"at risk; resolve targets or re-run without the flag")
 
     if not a.apply:
         print("dry-run — no writes. Re-run with --apply to write.")
         return
 
-    # ---- apply: pages (ONE transaction: update + chunk-clear are atomic,
-    # so a crash can never leave new content with stale chunks)
+    # ---- apply: ONE transaction for pages + refs together. Page ids are
+    # referenced via subselects, so newly inserted pages resolve inside the
+    # same txn. Any failure aborts before COMMIT -> full rollback, and a
+    # re-run is clean (page upserts are content-compared, ref writes are
+    # delete+recreate). A duplicate nid now fails the whole apply atomically
+    # instead of leaving partial progress.
+    def _pid(nid):
+        return (f'(SELECT id FROM "ClicPage" WHERE nid = {nid} '
+                f'AND "languageCode" = {sql_lit(a.lang)})')
+
+    stmts, n_ins, n_upd = [], 0, 0
     if not a.refs_only:
-        stmts = []
         for s in to_insert:
             tkey = topic_key_from_url(s["url"]) or s["topic_display"]
             pth = s["url"].replace("https://clic.org.hk", "") if s["url"].startswith("http") else s["url"]
@@ -475,6 +510,7 @@ def main():
                 f"{s['nid']}, {sql_lit(s['title'])}, {sql_lit(s['content_text'])}, "
                 f"{sql_lit(tkey)}, {sql_lit(a.lang)}, {sql_lit(s['url'])}, "
                 f"{sql_lit(pth)}, {sql_lit(s['topic_display'])}, NOW());")
+            n_ins += 1
         for s, fields in to_update:
             pth = s["url"].replace("https://clic.org.hk", "") if s["url"].startswith("http") else s["url"]
             stmts.append(
@@ -485,40 +521,36 @@ def main():
             stmts.append(f"DELETE FROM \"clic_chunks\" WHERE nid = {s['nid']} "
                          f"AND language_code = {sql_lit(a.lang)};")
             print(f"queued update nid={s['nid']} ({','.join(fields)}) + chunk clear")
-        run_txn(dburl, stmts, f"pages (created={len(to_insert)} updated={len(to_update)})")
-
-    # ---- apply: refs (ONE transaction: per-page delete+recreate is atomic,
-    # so a crash can never leave half-rebuilt edges; re-runs are idempotent)
+    pp_ins = sec_ins = cap_ins = n_ref_pages = 0
     if not a.skip_refs:
-        all_nids = [s["nid"] for s in scoped]
-        all_nids += [r["nid"] for e in ref_plan for r in e["clic"] if r["nid"] is not None]
-        id_map = fetch_ids(dburl, a.lang, all_nids)  # refresh: inserts now have ids
-        stmts, pp_ins, sec_ins, cap_ins = [], 0, 0, 0
+        insert_set = {s["nid"] for s in to_insert} if not a.refs_only else set()
         for e in ref_plan:
             s = e["s"]
-            pid = id_map.get(s["nid"])
-            if pid is None:
-                print(f"  nid={s['nid']} has no DB id, refs skipped")
+            if s["nid"] not in id_map and s["nid"] not in insert_set:
+                print(f"  nid={s['nid']} has no DB id and is not being inserted, refs skipped")
                 continue
-            stmts.append(f"DELETE FROM \"_ClicPageRelationToClicPage\" WHERE \"B\" = {pid};")
+            P = _pid(s["nid"])
+            stmts.append(f"DELETE FROM \"_ClicPageRelationToClicPage\" WHERE \"B\" = {P};")
             for rnid in sorted(e["planned_pp"]):
-                rid = id_map.get(rnid)
-                if rid is not None:
+                # target known pre-existing, or inserted earlier in this txn
+                if rnid in id_map or rnid in insert_set:
                     stmts.append(f"INSERT INTO \"_ClicPageRelationToClicPage\" (\"A\", \"B\") "
-                                 f"VALUES ({rid}, {pid}) ON CONFLICT DO NOTHING;")
+                                 f"VALUES ({_pid(rnid)}, {P}) ON CONFLICT DO NOTHING;")
                     pp_ins += 1
-            stmts.append(f"DELETE FROM \"_ClicPageToLegislationSection\" WHERE \"A\" = {pid};")
-            stmts.append(f"DELETE FROM \"_ClicPageToLegislationCap\" WHERE \"A\" = {pid};")
+            stmts.append(f"DELETE FROM \"_ClicPageToLegislationSection\" WHERE \"A\" = {P};")
+            stmts.append(f"DELETE FROM \"_ClicPageToLegislationCap\" WHERE \"A\" = {P};")
             for sid in sorted(e["planned_sec"]):
                 stmts.append(f"INSERT INTO \"_ClicPageToLegislationSection\" (\"A\", \"B\") "
-                             f"VALUES ({pid}, {sid}) ON CONFLICT DO NOTHING;")
+                             f"VALUES ({P}, {sid}) ON CONFLICT DO NOTHING;")
                 sec_ins += 1
             for cid in sorted(e["planned_cap"]):
                 stmts.append(f"INSERT INTO \"_ClicPageToLegislationCap\" (\"A\", \"B\") "
-                             f"VALUES ({pid}, {cid}) ON CONFLICT DO NOTHING;")
+                             f"VALUES ({P}, {cid}) ON CONFLICT DO NOTHING;")
                 cap_ins += 1
-        run_txn(dburl, stmts,
-                f"refs (page-page={pp_ins} section={sec_ins} cap={cap_ins})")
+            n_ref_pages += 1
+    run_script(dburl, stmts,
+               f"apply (pages +{n_ins} ~{n_upd}; refs pp={pp_ins} sec={sec_ins} cap={cap_ins} "
+               f"on {n_ref_pages} pages)")
     print("done. Next: re-chunk + embed + load these nids.")
 
 if __name__ == "__main__":
