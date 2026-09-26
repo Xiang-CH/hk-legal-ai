@@ -12,13 +12,17 @@ import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } fro
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
+import { useLocalStorage } from "usehooks-ts";
 import { cn } from "@/lib/utils";
 import { deriveTitle, loadMessages, saveMessages } from "@/lib/conversations";
 import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
 import { MyUIMessage } from "@/lib/types";
 import { routes } from "@/lib/routes";
+import { searchPrompt } from "@/lib/prompts";
+import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
@@ -41,6 +45,10 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const [input, setInput] = useState('');
   const [maxSteps, setMaxSteps] = useState(5);
   const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
+  // Dev-panel override of the model's system prompt. Persisted so it survives
+  // reloads; only sent when it differs from the built-in default, so prompt
+  // changes shipped in a deploy still take effect until the user edits it here.
+  const [systemPrompt, setSystemPrompt] = useLocalStorage("clic-chat:system-prompt", searchPrompt);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Collapse the history sidebar on small screens (and keep it in sync on
   // rotation/resize). A mount effect keeps the first client render identical
@@ -67,6 +75,21 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   // commit still belongs to the previous conversation, so skip persisting it.
   const skipPersist = useRef(false);
 
+  // Single source of request settings for every chat submission — the typed
+  // send, the ask_question auto-resubmit, and suggested prompts. Building it in
+  // one place keeps the dev-panel prompt override and search settings from
+  // being dropped mid-conversation.
+  const buildRequestBody = () => ({
+    maxSteps,
+    sessionId,
+    agenticSearchEnabled,
+    ...(systemPrompt.trim() &&
+    systemPrompt !== searchPrompt &&
+    systemPrompt.length <= SYSTEM_PROMPT_MAX_CHARS
+      ? { systemPrompt }
+      : {}),
+  });
+
   const handleSubmit = (e?: { preventDefault?: (() => void) }): void => {
     if (e && e.preventDefault) {
       e.preventDefault();
@@ -74,7 +97,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     if (!activeId || input.trim().length === 0) return;
     sendMessage(
       { text: input },
-      { body: { maxSteps, sessionId, agenticSearchEnabled } },
+      { body: buildRequestBody() },
     );
     setInput('');
 
@@ -281,6 +304,40 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
             </div>
           </div>
 
+          <div className="mb-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="font-semibold">System Prompt</h3>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setSystemPrompt(searchPrompt)}
+                disabled={systemPrompt === searchPrompt}
+              >
+                Reset
+              </Button>
+            </div>
+            <Textarea
+              value={systemPrompt}
+              onChange={(event) => setSystemPrompt(event.target.value)}
+              maxLength={SYSTEM_PROMPT_MAX_CHARS}
+              spellCheck={false}
+              className="min-h-64 max-h-96 resize-y font-mono text-xs md:text-xs"
+            />
+            <p className="mt-1 flex items-start justify-between gap-3 text-[11px] text-muted-foreground">
+              <span>Sent with each request when it differs from the built-in prompt. Reset restores the default.</span>
+              <span
+                className={
+                  systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS
+                    ? "shrink-0 text-destructive"
+                    : "shrink-0"
+                }
+              >
+                {systemPrompt.length.toLocaleString()}/{SYSTEM_PROMPT_MAX_CHARS.toLocaleString()}
+              </span>
+            </p>
+          </div>
+
           {messages[messages.length - 1]?.metadata?.searchMode && status !== "submitted" && (
             <div className="mb-4">
               <h3 className="font-semibold mb-2">Agent Run</h3>
@@ -354,7 +411,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
                     output,
                     // The auto-resubmit must carry the same request settings,
                     // or the route falls back to defaults and can switch mode mid-run.
-                    options: { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                    options: { body: buildRequestBody() },
                   })
                 }
                 // groundings={messages[messages.length - 1]?.metadata?.groundings}
@@ -393,7 +450,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
               if (!activeId) return;
               sendMessage(
                 { text: message },
-                { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                { body: buildRequestBody() },
               );
             }}
           />
