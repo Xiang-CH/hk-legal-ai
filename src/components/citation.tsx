@@ -1,6 +1,7 @@
 import React from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import { absolutePath } from "@/lib/routes";
 
 interface CitationProps {
   title: string;
@@ -21,13 +22,13 @@ export const Citation = ({ title, url, className }: CitationProps) => {
         {
           url.includes("clic.org") ? 
             <img
-              src="/clic-logo-2.svg"
+              src={absolutePath("/clic-logo-2.svg")}
               alt="CLIC Logo"
               className="size-5 shrink-0"
             />
            : url.includes("hklii") ?
             <img
-              src="/hklii-logo.png"
+              src={absolutePath("/hklii-logo.png")}
               alt="HKLII Logo"
               className="size-5 shrink-0"
             /> : 

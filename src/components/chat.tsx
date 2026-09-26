@@ -18,7 +18,7 @@ import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
 import { MyUIMessage } from "@/lib/types";
-import { routes } from "@/lib/routes";
+import { routes, absolutePath } from "@/lib/routes";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
@@ -88,7 +88,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     status,
     stop
   } = useChat<MyUIMessage>({
-    transport: new DefaultChatTransport({ api: routes.apiChat }),
+    transport: new DefaultChatTransport({ api: absolutePath(routes.apiChat) }),
     throttle: 50,
     // Resumes the agent after the user answers an ask_question tool call.
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
