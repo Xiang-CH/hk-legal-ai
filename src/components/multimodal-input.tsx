@@ -134,6 +134,12 @@ export function MultimodalInput({
     setLocalStorageInput(input);
   }, [input, setLocalStorageInput]);
 
+  // Re-fit the textarea whenever the value changes programmatically too (e.g.
+  // cleared on submit or when switching drafts), not just on keystrokes.
+  useEffect(() => {
+    adjustHeight();
+  }, [input]);
+
   const handleInput = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setInput(event.target.value);
     adjustHeight();
