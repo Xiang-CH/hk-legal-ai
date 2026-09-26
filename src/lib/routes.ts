@@ -1,17 +1,12 @@
 // Single source of truth for the app's URL mount point.
-// APP_BASE_PATH is wired into next.config.ts as `basePath`, so Next prefixes
-// pages, next/link, next/router and static assets (`_next/static` + `public/`)
-// automatically. Route values are therefore RELATIVE to the mount point.
-// Anything that escapes Next's URL handling (raw fetch, <img src>) must be
-// prefixed with absolutePath().
+// To re-mount the whole app under a different path, change APP_BASE_PATH
+// below (and rename the src/app/<base> folders to match — Next.js resolves
+// physical route folders, so those can't be dynamic).
 export const APP_BASE_PATH = "/clic-chat-hkulaw";
 
 export const routes = {
-  home: "/",
-  chat: "/c",
-  apiChat: "/api/chat",
-  apiClicSearch: "/api/clic/search",
+  home: APP_BASE_PATH,
+  chat: `${APP_BASE_PATH}/c`,
+  apiChat: `${APP_BASE_PATH}/api/chat`,
+  apiClicSearch: `${APP_BASE_PATH}/api/clic/search`,
 } as const;
-
-// Prefix a mount-relative path with APP_BASE_PATH.
-export const absolutePath = (path: string) => `${APP_BASE_PATH}${path}`;
