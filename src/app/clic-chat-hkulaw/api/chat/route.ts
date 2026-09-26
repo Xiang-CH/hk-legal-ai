@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
@@ -41,7 +42,7 @@ const chatRequestSchema = z.object({
 	searchDepth: z.number().int().min(1).optional(),
 	agenticSearchEnabled: z.boolean().optional(),
 	// Dev panel override for the system prompt; absent => built-in searchPrompt.
-	systemPrompt: z.string().trim().min(1).max(20_000).optional(),
+	systemPrompt: z.string().trim().min(1).max(SYSTEM_PROMPT_MAX_CHARS).optional(),
 	sessionId: correlationIdSchema.optional(),
 	userId: correlationIdSchema.optional(),
 });

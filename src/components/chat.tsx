@@ -22,6 +22,7 @@ import { Textarea } from "./ui/textarea";
 import { MyUIMessage } from "@/lib/types";
 import { routes } from "@/lib/routes";
 import { searchPrompt } from "@/lib/prompts";
+import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
@@ -82,7 +83,11 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     maxSteps,
     sessionId,
     agenticSearchEnabled,
-    ...(systemPrompt.trim() && systemPrompt !== searchPrompt ? { systemPrompt } : {}),
+    ...(systemPrompt.trim() &&
+    systemPrompt !== searchPrompt &&
+    systemPrompt.length <= SYSTEM_PROMPT_MAX_CHARS
+      ? { systemPrompt }
+      : {}),
   });
 
   const handleSubmit = (e?: { preventDefault?: (() => void) }): void => {
@@ -315,11 +320,21 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
             <Textarea
               value={systemPrompt}
               onChange={(event) => setSystemPrompt(event.target.value)}
+              maxLength={SYSTEM_PROMPT_MAX_CHARS}
               spellCheck={false}
               className="min-h-64 max-h-96 resize-y font-mono text-xs md:text-xs"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Sent with each request when it differs from the built-in prompt. Reset restores the default.
+            <p className="mt-1 flex items-start justify-between gap-3 text-[11px] text-muted-foreground">
+              <span>Sent with each request when it differs from the built-in prompt. Reset restores the default.</span>
+              <span
+                className={
+                  systemPrompt.length > SYSTEM_PROMPT_MAX_CHARS
+                    ? "shrink-0 text-destructive"
+                    : "shrink-0"
+                }
+              >
+                {systemPrompt.length.toLocaleString()}/{SYSTEM_PROMPT_MAX_CHARS.toLocaleString()}
+              </span>
             </p>
           </div>
 
