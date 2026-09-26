@@ -2,6 +2,7 @@ import Link from "next/link";
 import React, { memo } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { absolutePath } from "@/lib/routes";
 
 const NonMemoizedMarkdown = ({ children }: { children: string }) => {
   const components: Partial<Components> = {
@@ -74,19 +75,19 @@ const NonMemoizedMarkdown = ({ children }: { children: string }) => {
             {
               props.href?.includes("clic.org") ? 
                 <img
-                  src="/clic-logo-2.svg"
+                  src={absolutePath("/clic-logo-2.svg")}
                   alt="CLIC Logo"
                   className="size-5 shrink-0"
                 />
               : props.href?.includes("hklii") ?
                 <img
-                  src="/hklii-logo.png"
+                  src={absolutePath("/hklii-logo.png")}
                   alt="HKLII Logo"
                   className="size-5 shrink-0"
                 /> 
               : props.href?.includes("gov.hk") ?
                 <img
-                  src="/hk-gov-logo.svg"
+                  src={absolutePath("/hk-gov-logo.svg")}
                   alt="Gov HK Logo"
                   className="size-5 shrink-0"
                 />
