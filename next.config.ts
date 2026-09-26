@@ -1,37 +1,48 @@
 import type { NextConfig } from "next";
+import { PHASE_DEVELOPMENT_SERVER } from "next/constants";
 import { APP_BASE_PATH, routes } from "./src/lib/routes";
 
-const nextConfig: NextConfig = {
-    // The app is proxied under a sub-path of a shared domain, so Next must
-    // emit every URL (pages, next/link, _next assets, public/) under the mount
-    // point. basePath is the supported mechanism for that; assetPrefix is not.
-    basePath: APP_BASE_PATH,
-    // Azure SWA hybrid Next.js caps the app at 250 MB: standalone keeps it small.
-    output: "standalone",
-    /* config options here */
-    async redirects() {
-        return [
-            // Legacy `/chat` from when the app was mounted at the domain root.
-            // basePath is applied to source and destination automatically.
-            {
-                source: "/chat",
-                destination: routes.chat,
-                permanent: true,
-            },
-        ];
-    },
-    async rewrites() {
-        return [
-            {
-                source: "/_internal/studio",
-                destination: "/_internal/pages/http/databrowser.html",
-            },
-            {
-                source: "/_internal/studio/(.*)",
-                destination: "/_internal/$1",
-            },
-        ];
-    },
-};
+export default (phase: string): NextConfig => {
+    const isDev = phase === PHASE_DEVELOPMENT_SERVER;
 
-export default nextConfig;
+    const nextConfig: NextConfig = {
+        // Azure SWA hybrid rejects Next's `basePath` at deploy time, so the app
+        // stays physically mounted at /clic-chat-hkulaw. assetPrefix only
+        // rewrites the `_next/static` URLs Next emits (JS/CSS/fonts) to the
+        // mount point; the edge proxy is expected to strip that prefix for
+        // `/_next` before forwarding to SWA. Undefined in dev so `next dev`
+        // serves assets from the root as usual.
+        assetPrefix: isDev ? undefined : APP_BASE_PATH,
+        // Azure SWA hybrid Next.js caps the app at 250 MB: standalone keeps it small.
+        output: "standalone",
+        /* config options here */
+        async redirects() {
+            return [
+                {
+                    source: "/chat",
+                    destination: routes.chat,
+                    permanent: true,
+                },
+                {
+                    source: "/api/:path*",
+                    destination: `${routes.home}/api/:path*`,
+                    permanent: true,
+                },
+            ];
+        },
+        async rewrites() {
+            return [
+                {
+                    source: "/_internal/studio",
+                    destination: "/_internal/pages/http/databrowser.html",
+                },
+                {
+                    source: "/_internal/studio/(.*)",
+                    destination: "/_internal/$1",
+                },
+            ];
+        },
+    };
+
+    return nextConfig;
+};
