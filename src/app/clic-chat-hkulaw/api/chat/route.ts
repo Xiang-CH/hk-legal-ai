@@ -40,6 +40,8 @@ const chatRequestSchema = z.object({
 	maxSteps: z.number().int().min(1).optional(),
 	searchDepth: z.number().int().min(1).optional(),
 	agenticSearchEnabled: z.boolean().optional(),
+	// Dev panel override for the system prompt; absent => built-in searchPrompt.
+	systemPrompt: z.string().trim().min(1).max(20_000).optional(),
 	sessionId: correlationIdSchema.optional(),
 	userId: correlationIdSchema.optional(),
 });
@@ -78,6 +80,7 @@ async function handleLegacyChat(
 	messages: MyUIMessage[],
 	searchDepth: number,
 	onTraceComplete: TraceCompletion,
+	instructions?: string,
 ) {
 	// Build the model input and the retrieval query from the latest user message.
 	const modelMessages = await convertToModelMessages(messages);
@@ -403,7 +406,7 @@ async function handleLegacyChat(
 			});
 			// console.log("modelMessages: ", modelMessages);
 
-			const result = await createLegacyChatAgent().stream({
+			const result = await createLegacyChatAgent(instructions).stream({
 				prompt: modelMessages,
 				onEnd({ usage, text, reasoningText }) {
 						onTraceComplete({ output: text });
@@ -547,7 +550,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 					try {
 						if (searchMode === "agent") {
 							return await createAgenticChatResponse({
-								agent: createChatAgent(maxSteps),
+								agent: createChatAgent(maxSteps, request.systemPrompt),
 								messages: validated.data,
 								maxSteps,
 								abortSignal: req.signal,
@@ -555,7 +558,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 							});
 						}
 
-						return await handleLegacyChat(validated.data, searchDepth, completeTrace);
+						return await handleLegacyChat(validated.data, searchDepth, completeTrace, request.systemPrompt);
 					} catch (error) {
 						completeTrace({ output: "", error });
 						await langfuseSpanProcessor.forceFlush();

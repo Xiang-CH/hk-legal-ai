@@ -7,10 +7,10 @@ import { searchTools } from "@/lib/tools";
 export const DEFAULT_AGENT_MAX_STEPS = 5;
 export const AGENT_MAX_STEPS_CAP = 8;
 
-export function createChatAgent(maxSteps: number) {
+export function createChatAgent(maxSteps: number, instructions: string = searchPrompt) {
   return new ToolLoopAgent({
     model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
-    instructions: searchPrompt,
+    instructions,
     allowSystemInMessages: true,
     tools: searchTools,
     stopWhen: stepCountIs(maxSteps),
@@ -33,10 +33,10 @@ export function createChatAgent(maxSteps: number) {
 
 export type ChatAgent = ReturnType<typeof createChatAgent>;
 
-export function createLegacyChatAgent() {
+export function createLegacyChatAgent(instructions: string = searchPrompt) {
   return new ToolLoopAgent({
     model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
-    instructions: searchPrompt,
+    instructions,
     allowSystemInMessages: true,
     tools: {},
     stopWhen: stepCountIs(1),

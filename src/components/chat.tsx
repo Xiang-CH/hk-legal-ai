@@ -12,13 +12,16 @@ import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } fro
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
+import { useLocalStorage } from "usehooks-ts";
 import { cn } from "@/lib/utils";
 import { deriveTitle, loadMessages, saveMessages } from "@/lib/conversations";
 import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
+import { Textarea } from "./ui/textarea";
 import { MyUIMessage } from "@/lib/types";
 import { routes } from "@/lib/routes";
+import { searchPrompt } from "@/lib/prompts";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
@@ -41,6 +44,10 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const [input, setInput] = useState('');
   const [maxSteps, setMaxSteps] = useState(5);
   const [agenticSearchEnabled, setAgenticSearchEnabled] = useState(defaultAgenticSearchEnabled);
+  // Dev-panel override of the model's system prompt. Persisted so it survives
+  // reloads; only sent when it differs from the built-in default, so prompt
+  // changes shipped in a deploy still take effect until the user edits it here.
+  const [systemPrompt, setSystemPrompt] = useLocalStorage("clic-chat:system-prompt", searchPrompt);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   // Collapse the history sidebar on small screens (and keep it in sync on
   // rotation/resize). A mount effect keeps the first client render identical
@@ -74,7 +81,14 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     if (!activeId || input.trim().length === 0) return;
     sendMessage(
       { text: input },
-      { body: { maxSteps, sessionId, agenticSearchEnabled } },
+      {
+        body: {
+          maxSteps,
+          sessionId,
+          agenticSearchEnabled,
+          ...(systemPrompt.trim() && systemPrompt !== searchPrompt ? { systemPrompt } : {}),
+        },
+      },
     );
     setInput('');
 
@@ -279,6 +293,30 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
               />
               <span className="text-xs">{maxSteps}</span>
             </div>
+          </div>
+
+          <div className="mb-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <h3 className="font-semibold">System Prompt</h3>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                onClick={() => setSystemPrompt(searchPrompt)}
+                disabled={systemPrompt === searchPrompt}
+              >
+                Reset
+              </Button>
+            </div>
+            <Textarea
+              value={systemPrompt}
+              onChange={(event) => setSystemPrompt(event.target.value)}
+              spellCheck={false}
+              className="min-h-64 max-h-96 resize-y font-mono text-xs md:text-xs"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Sent with each request when it differs from the built-in prompt. Reset restores the default.
+            </p>
           </div>
 
           {messages[messages.length - 1]?.metadata?.searchMode && status !== "submitted" && (
