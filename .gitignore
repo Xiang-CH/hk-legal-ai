@@ -44,6 +44,8 @@ next-env.d.ts
 
 # outputs
 /scripts/*-output
+# generated: built _next/static copied under the app mount path
+/public/clic-chat-hkulaw/_next/
 
 .vscode
 __pycache__/
