@@ -74,6 +74,17 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   // commit still belongs to the previous conversation, so skip persisting it.
   const skipPersist = useRef(false);
 
+  // Single source of request settings for every chat submission — the typed
+  // send, the ask_question auto-resubmit, and suggested prompts. Building it in
+  // one place keeps the dev-panel prompt override and search settings from
+  // being dropped mid-conversation.
+  const buildRequestBody = () => ({
+    maxSteps,
+    sessionId,
+    agenticSearchEnabled,
+    ...(systemPrompt.trim() && systemPrompt !== searchPrompt ? { systemPrompt } : {}),
+  });
+
   const handleSubmit = (e?: { preventDefault?: (() => void) }): void => {
     if (e && e.preventDefault) {
       e.preventDefault();
@@ -81,14 +92,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     if (!activeId || input.trim().length === 0) return;
     sendMessage(
       { text: input },
-      {
-        body: {
-          maxSteps,
-          sessionId,
-          agenticSearchEnabled,
-          ...(systemPrompt.trim() && systemPrompt !== searchPrompt ? { systemPrompt } : {}),
-        },
-      },
+      { body: buildRequestBody() },
     );
     setInput('');
 
@@ -392,7 +396,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
                     output,
                     // The auto-resubmit must carry the same request settings,
                     // or the route falls back to defaults and can switch mode mid-run.
-                    options: { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                    options: { body: buildRequestBody() },
                   })
                 }
                 // groundings={messages[messages.length - 1]?.metadata?.groundings}
@@ -431,7 +435,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
               if (!activeId) return;
               sendMessage(
                 { text: message },
-                { body: { maxSteps, sessionId, agenticSearchEnabled } },
+                { body: buildRequestBody() },
               );
             }}
           />
