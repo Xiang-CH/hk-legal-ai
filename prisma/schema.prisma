@@ -192,6 +192,38 @@ model ClicChunk {
   @@map("clic_chunks")
 }
 
+model ChatUsageEvent {
+  id         String @id @default(cuid())
+  sessionId  String @map("session_id")
+  turnIndex  Int    @map("turn_index")
+  previousId String? @map("previous_id")
+
+  previous ChatUsageEvent?  @relation("ChatUsageEventChain", fields: [previousId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  next     ChatUsageEvent[] @relation("ChatUsageEventChain")
+
+  ipHash        String?  @map("ip_hash")
+  userAgent     String?  @map("user_agent")
+  domain        String?
+  searchMode    String   @map("search_mode") // "agent" | "legacy"
+  model         String?
+  stepCount     Int?     @map("step_count")
+  toolCallCount Int?     @map("tool_call_count")
+  inputTokens   Int?     @map("input_tokens")
+  outputTokens  Int?     @map("output_tokens")
+  totalTokens   Int?     @map("total_tokens")
+  costUsd       Decimal? @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs     Int?     @map("latency_ms")
+  question      String   @db.Text
+  answer        String   @db.Text
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@unique([sessionId, turnIndex])
+  @@index([sessionId, createdAt])
+  @@index([ipHash, createdAt])
+  @@index([createdAt])
+  @@map("chat_usage_events")
+}
+
 model JudgmentChunk {
   id              BigInt                       @id @default(autoincrement())
   judgmentId      Int                          @map("judgment_id")

@@ -43,6 +43,7 @@ Table LegislationSection {
   referencingLegislationCaps LegislationCap [not null]
   referencedByJudgments Judgment [not null]
   relatedInterpretations Interpretation [not null]
+  chunks legislation_chunks [not null]
 
   indexes {
     (id, languageCode) [unique]
@@ -129,6 +130,26 @@ Table Case {
   judgments Judgment [not null]
 }
 
+Table legislation_chunks {
+  id BigInt [pk, increment]
+  sectionId Int [not null]
+  chunkNo Int [not null]
+  languageCode String [not null]
+  capNumber String [not null]
+  sectionNumber String [not null]
+  subsectionNumber String
+  heading String
+  content String [not null]
+  url String [not null]
+  context String
+  cjkTokens String
+  section LegislationSection [not null]
+
+  indexes {
+    (sectionId, languageCode, chunkNo) [unique]
+  }
+}
+
 Table clic_chunks {
   id BigInt [pk, increment]
   nid Int [not null]
@@ -144,6 +165,34 @@ Table clic_chunks {
 
   indexes {
     (nid, languageCode, chunkNo) [unique]
+  }
+}
+
+Table chat_usage_events {
+  id String [pk]
+  sessionId String [not null]
+  turnIndex Int [not null]
+  previousId String
+  previous chat_usage_events
+  next chat_usage_events [not null]
+  ipHash String
+  userAgent String
+  domain String
+  searchMode String [not null]
+  model String
+  stepCount Int
+  toolCallCount Int
+  inputTokens Int
+  outputTokens Int
+  totalTokens Int
+  costUsd Decimal
+  latencyMs Int
+  question String [not null]
+  answer String [not null]
+  createdAt DateTime [default: `now()`, not null]
+
+  indexes {
+    (sessionId, turnIndex) [unique]
   }
 }
 
@@ -229,6 +278,10 @@ Ref: Interpretation.(capNumber, languageCode) > LegislationCap.(capNumber, langu
 
 Ref: ParallelCitations.judgmentId > Judgment.id
 
+Ref: legislation_chunks.(sectionId, languageCode) > LegislationSection.(id, languageCode) [delete: Cascade]
+
 Ref: clic_chunks.(nid, languageCode) > ClicPage.(nid, languageCode) [delete: Cascade]
+
+Ref: chat_usage_events.previousId - chat_usage_events.id [delete: Set Null]
 
 Ref: judgment_chunks.judgmentId > Judgment.id [delete: Cascade]
