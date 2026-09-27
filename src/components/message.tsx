@@ -199,7 +199,7 @@ function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boole
           {isStreaming ? "Thinking" : "Reasoning"}
         </span>
       </CollapsibleTrigger>
-      <CollapsibleContent className="pt-2">
+      <CollapsibleContent className="pt-2 [overflow-wrap:anywhere]">
         <Markdown>{text}</Markdown>
       </CollapsibleContent>
     </Collapsible>
@@ -301,7 +301,7 @@ const PreviewMessage = React.forwardRef<
           </div>
         )}
 
-        <div className="flex min-w-0 flex-col gap-2 w-full">
+        <div className="flex min-w-0 flex-col gap-2 w-full [overflow-wrap:anywhere]">
           {message.role === "user" && textContent && (
             <div className="flex flex-col gap-4">
               <Markdown>{textContent}</Markdown>

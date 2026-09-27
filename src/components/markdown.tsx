@@ -19,7 +19,7 @@ const NonMemoizedMarkdown = ({ children }: { children: string }) => {
         </pre>
       ) : (
         <code
-          className={`${className} text-sm bg-zinc-100 dark:bg-zinc-800 py-0.5 px-1 rounded-md`}
+          className={`${className} text-sm bg-zinc-100 dark:bg-zinc-800 py-0.5 px-1 rounded-md [overflow-wrap:anywhere]`}
           {...props}
         >
           {children}
@@ -68,10 +68,10 @@ const NonMemoizedMarkdown = ({ children }: { children: string }) => {
         <Link
           target="_blank"
           rel="noopener noreferrer"
-          className="hover:underline truncate font-medium"
+          className="hover:underline font-medium max-w-full break-words"
           {...props}
         >
-          <span className={"items-center gap-2 text-sm bg-muted/50 px-2 py-0.5 rounded-lg text-blue-500 w-fit inline-flex translate-y-1"}>
+          <span className={"items-center gap-2 text-sm bg-muted/50 px-2 py-0.5 rounded-lg text-blue-500 w-fit max-w-full min-w-0 whitespace-normal [overflow-wrap:anywhere] inline-flex translate-y-1"}>
             {
               props.href?.includes("clic.org") ? 
                 <img
