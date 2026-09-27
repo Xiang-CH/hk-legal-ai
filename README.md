@@ -138,6 +138,7 @@ directly). Key variables:
 | `RERANK_COST_PER_CALL` | Optional per-call cost for usage accounting (default 0) |
 | `AGENTIC_SEARCH_ENABLED` | Server-side kill switch for the agent loop |
 | `AGENTIC_MAX_STEPS` | Default agent step budget (1–8) |
+| `USAGE_LOG_IP_SALT` | HMAC salt for hashing logged IPs (production) |
 | `LANGFUSE_BASE_URL` / `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Tracing |
 | `LANGFUSE_TRACING_ENVIRONMENT` / `LANGFUSE_RELEASE` | Optional trace labels |
 | `PGHOST` / `PGPORT` / `PGUSER` / `PGDATABASE` / `PGPASSWORD` | Used by pipeline scripts |
@@ -156,6 +157,8 @@ Models fall into two groups:
   `Judgment`, `ParallelCitations`, `Case`, plus their junction relations.
 - **Chunks** (search units): `ClicChunk`, `JudgmentChunk`, `LegislationChunk` — each with
   `embedding halfvec(3072)`, `tsv tsvector`, optional `cjk_tokens`, and an FK to its parent.
+- **Usage log**: `ChatUsageEvent` — one row per chat turn with usage metrics plus the
+  question and answer text, chained within a conversation by `sessionId` and `turnIndex`.
 
 Commands: `pnpm db:generate`, `pnpm db:push`, `pnpm db:format`, `pnpm db:studio`. A DBML
 diagram is generated under `prisma/dbml/`.
@@ -202,6 +205,21 @@ user IDs. Both modes emit nested spans (`semantic-search`, `search-clic`,
 `search-judgment-summary`, `search-legislation-sql`, `rerank-*`) and agent tool calls
 (`tool:<name>`). Traces are force-flushed when the response stream closes, which matters
 on serverless.
+
+### Anonymous usage logging
+
+In production, each chat turn also appends a row to `chat_usage_events` via
+`src/lib/usage-log.ts`: session id, `turnIndex` (plus a `previousId` link to the prior
+turn), hashed client IP, user agent, requesting domain, search mode, model, step/tool
+counts, token counts, estimated cost, latency, and the question and answer text. The IP
+is stored only as an HMAC-SHA256 hash using `USAGE_LOG_IP_SALT`, never raw, and logging
+is skipped outside production. The write is scheduled with Next's `after()` so it never
+delays or fails the chat response.
+
+These rows hold question, answer, and pseudonymous IP data, so set a retention window
+(suggested: 90 days) and purge by `createdAt` on that schedule. Only record turns that
+completed without error, and if `USAGE_LOG_IP_SALT` is unset in production the IP hash is
+skipped rather than stored under a known key.
 
 ## Routing & deployment
 

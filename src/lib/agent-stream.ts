@@ -17,7 +17,20 @@ import type { MyMetadata, MyUIMessage } from "@/lib/types";
 import { z } from "zod";
 
 type ChatChunk = InferUIMessageChunk<MyUIMessage>;
-export type TraceCompletion = (result: { output: string; error?: unknown }) => void;
+export interface TraceUsageSummary {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  costUsd?: number;
+}
+export interface TraceCompletionResult {
+  output: string;
+  error?: unknown;
+  usage?: TraceUsageSummary;
+  stepCount?: number;
+  toolCallCount?: number;
+}
+export type TraceCompletion = (result: TraceCompletionResult) => void;
 type AgentTextChunk = TextStreamPart<typeof searchTools>;
 type SourceChunk = Extract<ChatChunk, { type: "source-url" }>;
 type SearchToolName =
@@ -383,6 +396,14 @@ export async function createAgenticChatResponse({
         onTraceComplete({
           output: outputText,
           ...(streamError === undefined ? {} : { error: streamError }),
+          usage: {
+            inputTokens: usage.inputTokens,
+            outputTokens: usage.outputTokens,
+            totalTokens: usage.totalTokens,
+            costUsd: calculateGpt6LunaCost(usage).totalCost,
+          },
+          stepCount: Math.max(stepCount, 1),
+          toolCallCount: toolNamesByCallId.size,
         });
         await langfuseSpanProcessor.forceFlush();
       },

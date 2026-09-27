@@ -1,6 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
+import { after } from "next/server";
+import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
+import {
+	clientIpFromHeaders,
+	domainFromHeaders,
+	recordChatUsage,
+	usageLoggingEnabled,
+	type ChatUsageLogInput,
+} from "@/lib/usage-log";
 
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
@@ -51,6 +60,20 @@ type ChatRequest = z.infer<typeof chatRequestSchema>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
+}
+
+/** Flatten a model message's content to plain text (for usage logging). */
+function contentToText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		return content
+			.map((part) =>
+				isRecord(part) && part.type === "text" && typeof part.text === "string" ? part.text : "",
+			)
+			.join(" ")
+			.trim();
+	}
+	return "";
 }
 
 function normalizeMessageMetadata(messages: unknown[]): unknown[] {
@@ -410,12 +433,21 @@ async function handleLegacyChat(
 			const result = await createLegacyChatAgent(instructions).stream({
 				prompt: modelMessages,
 				onEnd({ usage, text, reasoningText }) {
-						onTraceComplete({ output: text });
-
+						const cost = calculateGpt6LunaCost(usage);
 						// T09: rerank cost is per API call (Cohere bills searches, not docs).
 						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
 						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
-						const cost = calculateGpt6LunaCost(usage);
+						onTraceComplete({
+							output: text,
+							usage: {
+								inputTokens: usage.inputTokens,
+								outputTokens: usage.outputTokens,
+								totalTokens: usage.totalTokens,
+								costUsd: cost.totalCost + rerankCost,
+							},
+							stepCount: 1,
+							toolCallCount: 0,
+						});
 						const fullUsage = {
 							inputTokens: cost.totalInputTokens,
 							uncachedInputTokens: cost.uncachedInputTokens,
@@ -514,6 +546,15 @@ async function handleChatRequest(req: Request): Promise<Response> {
 	// Server flag is the upper bound (kill switch); the client may only opt out.
 	const agenticSearchEnabled = serverAgenticEnabled && (request.agenticSearchEnabled ?? true);
 	const searchMode = agenticSearchEnabled ? "agent" : "legacy";
+	const startedAt = Date.now();
+	const questionText = contentToText(inputText);
+	// Fall back to a per-request id so anonymous turns are still logged.
+	const usageSessionId = request.sessionId ?? `anon-${randomUUID()}`;
+	const requestMeta = {
+		ip: clientIpFromHeaders(req.headers),
+		userAgent: req.headers.get("user-agent"),
+		domain: domainFromHeaders(req.headers),
+	};
 
 	return propagateAttributes(
 		{
@@ -533,7 +574,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 				async (rootObservation) => {
 					rootObservation.update({ input: inputText });
 					let completed = false;
-					const completeTrace: TraceCompletion = ({ output, error }) => {
+					const completeTrace: TraceCompletion = ({ output, error, usage, stepCount, toolCallCount }) => {
 						if (completed) return;
 						completed = true;
 						if (error === undefined) {
@@ -546,6 +587,31 @@ async function handleChatRequest(req: Request): Promise<Response> {
 							});
 						}
 						rootObservation.end();
+
+						// Anonymous usage log: production only, one successful turn per row.
+						if (usageLoggingEnabled() && error === undefined && questionText) {
+							const payload: ChatUsageLogInput = {
+								sessionId: usageSessionId,
+								question: questionText,
+								answer: output,
+								searchMode,
+								model: process.env.LLM_MODEL || "gpt-5.4-mini",
+								stepCount: stepCount ?? 1,
+								toolCallCount: toolCallCount ?? 0,
+								inputTokens: usage?.inputTokens ?? null,
+								outputTokens: usage?.outputTokens ?? null,
+								totalTokens: usage?.totalTokens ?? null,
+								costUsd: usage?.costUsd ?? null,
+								latencyMs: Date.now() - startedAt,
+								...requestMeta,
+							};
+							try {
+								after(() => recordChatUsage(payload));
+							} catch (logError) {
+								console.error("Failed to schedule chat usage log", logError);
+								void recordChatUsage(payload);
+							}
+						}
 					};
 
 					try {
