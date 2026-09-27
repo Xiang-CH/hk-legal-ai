@@ -222,7 +222,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   }, [messages, scrollToElement, messagesContainerRef]);
 
   return (
-    <div className="flex h-[calc(100dvh-52px)] max-h-[calc(100dvh-52px)] w-full">
+    <div className="flex h-[calc(100dvh-37px)] max-h-[calc(100dvh-37px)] w-full">
 
       {/* History sidebar (desktop) */}
       {sidebarOpen && (
@@ -367,25 +367,25 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
 
 
       <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-hidden", "max-w-3xl")}>
-        <div className="flex items-center gap-1 px-3 pt-2">
+        <div className="flex items-center gap-1 px-3 pt-1">
           {!sidebarOpen && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-7 w-7"
               onClick={() => setSidebarOpen(true)}
               aria-label="Show conversation history"
             >
               <PanelLeftOpen size={17} />
             </Button>
           )}
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-700 dark:text-neutral-300">
             {activeConversation?.title ?? "New conversation"}
           </span>
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-7 w-7"
             onClick={handleNewConversation}
             disabled={isBusy}
             aria-label="Start a new conversation"
@@ -397,7 +397,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
           viewportRef={messagesContainerRef}
           className="min-w-0 min-h-0 flex-1"
         >
-          <div className="flex min-w-0 flex-col gap-6 pt-4 pb-36">
+          <div className="flex min-w-0 flex-col gap-6 pt-1 pb-36">
             {messages.length === 0 && <Overview />}
 
             {messages.map((message) => (

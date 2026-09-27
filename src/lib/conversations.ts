@@ -10,7 +10,7 @@ export interface ConversationMeta {
 const LIST_KEY = "clic-chat:conversations:v1";
 const ACTIVE_KEY = "clic-chat:active-id:v1";
 export const MAX_CONVERSATIONS = 50;
-const TITLE_MAX_LENGTH = 30;
+const TITLE_MAX_LENGTH = 80;
 
 const msgKey = (id: string) => `clic-chat:messages:${id}:v1`;
 
