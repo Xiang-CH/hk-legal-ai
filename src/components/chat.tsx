@@ -367,12 +367,12 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
 
 
       <div className={cn("flex flex-col min-w-0 bg-background w-full h-full overflow-hidden", "max-w-3xl")}>
-        <div className="flex items-center gap-1 px-3 pt-2">
+        <div className="flex items-center gap-1 px-3 pt-1">
           {!sidebarOpen && (
             <Button
               variant="ghost"
               size="icon"
-              className="h-8 w-8"
+              className="h-7 w-7"
               onClick={() => setSidebarOpen(true)}
               aria-label="Show conversation history"
             >
@@ -385,7 +385,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
           <Button
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="h-7 w-7"
             onClick={handleNewConversation}
             disabled={isBusy}
             aria-label="Start a new conversation"
@@ -397,7 +397,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
           viewportRef={messagesContainerRef}
           className="min-w-0 min-h-0 flex-1"
         >
-          <div className="flex min-w-0 flex-col gap-6 pt-4 pb-36">
+          <div className="flex min-w-0 flex-col gap-6 pt-1 pb-36">
             {messages.length === 0 && <Overview />}
 
             {messages.map((message) => (
