@@ -216,6 +216,11 @@ is stored only as an HMAC-SHA256 hash using `USAGE_LOG_IP_SALT`, never raw, and 
 is skipped outside production. The write is scheduled with Next's `after()` so it never
 delays or fails the chat response.
 
+These rows hold question, answer, and pseudonymous IP data, so set a retention window
+(suggested: 90 days) and purge by `createdAt` on that schedule. Only record turns that
+completed without error, and if `USAGE_LOG_IP_SALT` is unset in production the IP hash is
+skipped rather than stored under a known key.
+
 ## Routing & deployment
 
 The app is mounted at `/clic-chat-hkulaw` and proxied on a shared domain. Next's

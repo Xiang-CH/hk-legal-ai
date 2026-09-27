@@ -196,10 +196,10 @@ model ChatUsageEvent {
   id         String @id @default(cuid())
   sessionId  String @map("session_id")
   turnIndex  Int    @map("turn_index")
-  previousId String? @map("previous_id")
+  previousId String? @unique @map("previous_id")
 
-  previous ChatUsageEvent?  @relation("ChatUsageEventChain", fields: [previousId], references: [id], onDelete: SetNull, onUpdate: NoAction)
-  next     ChatUsageEvent[] @relation("ChatUsageEventChain")
+  previous ChatUsageEvent? @relation("ChatUsageEventChain", fields: [previousId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  next     ChatUsageEvent? @relation("ChatUsageEventChain")
 
   ipHash        String?  @map("ip_hash")
   userAgent     String?  @map("user_agent")

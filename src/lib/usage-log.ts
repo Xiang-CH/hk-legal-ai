@@ -38,6 +38,14 @@ export function usageLoggingEnabled(): boolean {
 export function hashIp(ip: string | null): string | null {
   if (!ip) return null;
   const salt = process.env.USAGE_LOG_IP_SALT ?? "";
+  // Never hash with an empty key: a known-key HMAC of an IPv4 address is
+  // reversible by brute force. Without a salt, store no IP hash at all.
+  if (!salt) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn("USAGE_LOG_IP_SALT is not set; skipping IP hash for usage logging");
+    }
+    return null;
+  }
   return createHmac("sha256", salt).update(ip).digest("hex");
 }
 
@@ -65,9 +73,9 @@ export function domainFromHeaders(headers: Headers): string | null {
 
 /**
  * Append one turn to the session log. Never throws: a logging failure must not
- * affect the chat response. `turnIndex` is assigned here (previous + 1); the
- * unique index on (sessionId, turnIndex) guards concurrent turns, so a losing
- * write retries against a fresh read.
+ * affect the chat response. `turnIndex` is assigned here (previous + 1) under a
+ * per-session advisory lock, so concurrent completions cannot both claim the
+ * same index; the unique index on (sessionId, turnIndex) stays as a backstop.
  */
 export async function recordChatUsage(input: ChatUsageLogInput): Promise<void> {
   if (!usageLoggingEnabled()) return;
@@ -93,6 +101,9 @@ export async function recordChatUsage(input: ChatUsageLogInput): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       await prisma.$transaction(async (tx) => {
+        // Serialize turn-index allocation per session so concurrent completions
+        // cannot both read the same latest index. Released at transaction end.
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.sessionId}))`;
         const previous = await tx.chatUsageEvent.findFirst({
           where: { sessionId: input.sessionId },
           orderBy: { turnIndex: "desc" },

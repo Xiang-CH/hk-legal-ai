@@ -172,9 +172,9 @@ Table chat_usage_events {
   id String [pk]
   sessionId String [not null]
   turnIndex Int [not null]
-  previousId String
+  previousId String [unique]
   previous chat_usage_events
-  next chat_usage_events [not null]
+  next chat_usage_events
   ipHash String
   userAgent String
   domain String

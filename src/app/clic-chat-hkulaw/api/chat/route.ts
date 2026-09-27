@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { after } from "next/server";
+import { randomUUID } from "node:crypto";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import {
 	clientIpFromHeaders,
@@ -433,21 +434,20 @@ async function handleLegacyChat(
 				prompt: modelMessages,
 				onEnd({ usage, text, reasoningText }) {
 						const cost = calculateGpt6LunaCost(usage);
+						// T09: rerank cost is per API call (Cohere bills searches, not docs).
+						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
+						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
 						onTraceComplete({
 							output: text,
 							usage: {
 								inputTokens: usage.inputTokens,
 								outputTokens: usage.outputTokens,
 								totalTokens: usage.totalTokens,
-								costUsd: cost.totalCost,
+								costUsd: cost.totalCost + rerankCost,
 							},
 							stepCount: 1,
 							toolCallCount: 0,
 						});
-
-						// T09: rerank cost is per API call (Cohere bills searches, not docs).
-						// Set RERANK_COST_PER_CALL from the Foundry portal pricing; default 0.
-						const rerankCost = rerankUsage.calls * Number(process.env.RERANK_COST_PER_CALL || 0);
 						const fullUsage = {
 							inputTokens: cost.totalInputTokens,
 							uncachedInputTokens: cost.uncachedInputTokens,
@@ -548,6 +548,8 @@ async function handleChatRequest(req: Request): Promise<Response> {
 	const searchMode = agenticSearchEnabled ? "agent" : "legacy";
 	const startedAt = Date.now();
 	const questionText = contentToText(inputText);
+	// Fall back to a per-request id so anonymous turns are still logged.
+	const usageSessionId = request.sessionId ?? `anon-${randomUUID()}`;
 	const requestMeta = {
 		ip: clientIpFromHeaders(req.headers),
 		userAgent: req.headers.get("user-agent"),
@@ -586,10 +588,10 @@ async function handleChatRequest(req: Request): Promise<Response> {
 						}
 						rootObservation.end();
 
-						// Anonymous usage log: production only, one row per turn.
-						if (usageLoggingEnabled() && request.sessionId && questionText) {
+						// Anonymous usage log: production only, one successful turn per row.
+						if (usageLoggingEnabled() && error === undefined && questionText) {
 							const payload: ChatUsageLogInput = {
-								sessionId: request.sessionId,
+								sessionId: usageSessionId,
 								question: questionText,
 								answer: output,
 								searchMode,

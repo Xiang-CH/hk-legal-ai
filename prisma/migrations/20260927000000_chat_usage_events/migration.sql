@@ -26,6 +26,7 @@ CREATE TABLE "chat_usage_events" (
 );
 
 CREATE UNIQUE INDEX "chat_usage_events_session_id_turn_index_key" ON "chat_usage_events"("session_id", "turn_index");
+CREATE UNIQUE INDEX "chat_usage_events_previous_id_key" ON "chat_usage_events"("previous_id");
 CREATE INDEX "chat_usage_events_session_id_created_at_idx" ON "chat_usage_events"("session_id", "created_at");
 CREATE INDEX "chat_usage_events_ip_hash_created_at_idx" ON "chat_usage_events"("ip_hash", "created_at");
 CREATE INDEX "chat_usage_events_created_at_idx" ON "chat_usage_events"("created_at");
