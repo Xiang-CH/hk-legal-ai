@@ -379,7 +379,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
               <PanelLeftOpen size={17} />
             </Button>
           )}
-          <span className="min-w-0 flex-1 truncate text-sm font-medium">
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-neutral-700 dark:text-neutral-300">
             {activeConversation?.title ?? "New conversation"}
           </span>
           <Button
