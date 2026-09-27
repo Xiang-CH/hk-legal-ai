@@ -26,6 +26,12 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         className={cn(
           "focus-visible:ring-ring/50 size-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1",
+          // Radix wraps children in a `display: table` element, so any child with
+          // a wide min-content (long link, inline code, nowrap row) grows the
+          // whole content box past the viewport and overflows instead of
+          // shrinking. Force that wrapper back to a normal block so widths are
+          // bounded by the viewport.
+          "[&>div]:block! [&>div]:w-full [&>div]:min-w-0",
           viewportClassName
         )}
       >

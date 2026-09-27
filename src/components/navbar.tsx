@@ -17,10 +17,10 @@ export const Navbar = () => {
 
   return (
     <NavigationMenu className="max-w-full w-full justify-between px-4 border-b gap-4 box-border">
-      <div className="flex items-center my-1">
+      <div className="flex items-center">
         <NavigationMenuList>
           <NavigationMenuItem>
-            <NavigationMenuLink className="font-medium text-lg" asChild>
+            <NavigationMenuLink className="font-medium text-lg py-1" asChild>
               <Link href={routes.home}>CLIC CHAT</Link>
             </NavigationMenuLink>
           </NavigationMenuItem>

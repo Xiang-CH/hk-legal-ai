@@ -222,7 +222,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   }, [messages, scrollToElement, messagesContainerRef]);
 
   return (
-    <div className="flex h-[calc(100dvh-52px)] max-h-[calc(100dvh-52px)] w-full">
+    <div className="flex h-[calc(100dvh-37px)] max-h-[calc(100dvh-37px)] w-full">
 
       {/* History sidebar (desktop) */}
       {sidebarOpen && (
