@@ -101,7 +101,11 @@ All endpoints live under the mount path (constants in `src/lib/routes.ts`):
   `{messages, maxSteps?, searchDepth?, agenticSearchEnabled?, systemPrompt?, sessionId?, userId?}`.
 - `POST /clic-chat-hkulaw/api/clic/search` — direct CLIC search. Body:
   `{query, language?|language_code?, top?, skip?, filter?}`. Returns `{results, clicPages}`.
-- `GET /clic-chat-hkulaw/c` — chat page (`/chat` and `/api/*` redirect here).
+- `GET /clic-chat-hkulaw/c` — starts a new chat and adds its `sessionId` to the URL.
+  Refreshing `/clic-chat-hkulaw/c?sessionId=<id>` restores that chat's messages and
+  draft from this browser. Selecting chats and using Back/Forward updates the
+  active session. Unknown or deleted session IDs start a fresh chat. `/chat`
+  redirects to the chat page; `/api/*` redirects to the mounted API paths.
 
 ## Getting started
 
