@@ -133,6 +133,8 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     if (!conversationsLoaded || !activeId) return;
     if (hydratedConversation.current === activeId) return;
     const isFirstHydration = hydratedConversation.current === null;
+    // URL navigation can switch sessions while a response is still streaming.
+    if (!isFirstHydration) stop();
     hydratedConversation.current = activeId;
     messageRefs.current.clear();
     // The input draft is owned by MultimodalInput (per-conversation key);

@@ -1,29 +1,39 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   MAX_CONVERSATIONS,
   NEW_CONVERSATION_TITLE,
   deleteStoredMessages,
-  loadActiveId,
   loadConversationList,
   newConversationId,
-  saveActiveId,
   saveConversationList,
   type ConversationMeta,
 } from "@/lib/conversations";
 
+function updateSessionUrl(id: string, replace = false) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("sessionId", id);
+  if (replace) window.history.replaceState(null, "", url);
+  else window.history.pushState(null, "", url);
+}
+
 export function useConversations() {
+  const requestedId = useSearchParams().get("sessionId");
+  const hydratedRequest = useRef<string | null | undefined>(undefined);
   const [conversations, setConversations] = useState<ConversationMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  // Hydrate from browser local store once (client-only). This must run in an
-  // effect so the first client render matches the server render.
+  // The URL owns selection, including browser Back/Forward. A bare or unknown
+  // session URL starts a new chat instead of resuming the last browser session.
   /* eslint-disable react-hooks/set-state-in-effect -- client-only hydration */
   useEffect(() => {
+    if (hydratedRequest.current === requestedId) return;
+    hydratedRequest.current = requestedId;
     const list = loadConversationList();
-    if (list.length === 0) {
+    if (!requestedId || !list.some((c) => c.id === requestedId)) {
       const id = newConversationId();
       const now = Date.now();
       const initial: ConversationMeta = {
@@ -32,19 +42,18 @@ export function useConversations() {
         createdAt: now,
         updatedAt: now,
       };
-      setConversations([initial]);
+      const next = [initial, ...list];
+      setConversations(next.slice(0, MAX_CONVERSATIONS));
       setActiveId(id);
-      saveConversationList([initial]);
-      saveActiveId(id);
+      saveConversationList(next);
+      hydratedRequest.current = id;
+      updateSessionUrl(id, true);
     } else {
       setConversations(list);
-      const stored = loadActiveId();
-      const valid = stored && list.some((c) => c.id === stored) ? stored : list[0]!.id;
-      setActiveId(valid);
-      saveActiveId(valid);
+      setActiveId(requestedId);
     }
     setIsLoaded(true);
-  }, []);
+  }, [requestedId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const createConversation = useCallback(() => {
@@ -56,22 +65,21 @@ export function useConversations() {
       createdAt: now,
       updatedAt: now,
     };
-    setConversations((prev) => {
-      const next = [meta, ...prev];
-      // Pass the uncapped list so saveConversationList can purge the
-      // message/draft keys of conversations that fall beyond the cap.
-      saveConversationList(next);
-      return next.slice(0, MAX_CONVERSATIONS);
-    });
+    const next = [meta, ...conversations];
+    saveConversationList(next);
+    setConversations(next.slice(0, MAX_CONVERSATIONS));
     setActiveId(id);
-    saveActiveId(id);
+    hydratedRequest.current = id;
+    updateSessionUrl(id);
     return id;
-  }, []);
+  }, [conversations]);
 
   const selectConversation = useCallback((id: string) => {
+    if (id === activeId || !conversations.some((c) => c.id === id)) return;
     setActiveId(id);
-    saveActiveId(id);
-  }, []);
+    hydratedRequest.current = id;
+    updateSessionUrl(id);
+  }, [activeId, conversations]);
 
   const deleteConversation = useCallback(
     (id: string) => {
@@ -89,15 +97,19 @@ export function useConversations() {
         setConversations([fresh]);
         setActiveId(freshId);
         saveConversationList([fresh]);
-        saveActiveId(freshId);
+        hydratedRequest.current = freshId;
+        updateSessionUrl(freshId, true);
         return;
       }
       setConversations(next);
       saveConversationList(next);
       if (activeId === id) {
-        const fallback = next[0]!.id;
-        setActiveId(fallback);
-        saveActiveId(fallback);
+        const fallback = next[0];
+        if (fallback) {
+          setActiveId(fallback.id);
+          hydratedRequest.current = fallback.id;
+          updateSessionUrl(fallback.id, true);
+        }
       }
     },
     [conversations, activeId],
