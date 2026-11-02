@@ -184,7 +184,7 @@ async function handleLegacyChat(
 							judgmentSpan.update({ input: searchQuery });
 							let count = 0;
 							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.chunk_no === result.chunk_no);
+								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
 								if (!existing) judgmentCandidates.push(result);
 								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
 								count++;
@@ -240,7 +240,7 @@ async function handleLegacyChat(
 					judgmentResults.push({ ...result, rerankerScore: rerank_score ?? undefined, rerank_score });
 					writer.write({
 						type: "source-url",
-						sourceId: `judgment-${result.judgmentId}-${result.chunk_no}`,
+						sourceId: `judgment-${result.judgmentId}-${result.documentId ? `${result.documentId}-` : ""}${result.chunk_no}`,
 						url: process.env.HKLII_BASEURL + result.url,
 						title: result.neutralCitation,
 						providerMetadata: {
