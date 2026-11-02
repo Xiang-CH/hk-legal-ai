@@ -1,15 +1,24 @@
+import { fulltextEnabled, getFulltext, documentOutputSchema } from "@/lib/judgment-fulltext";
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { TOOL_TIMEOUT_MS, withTimeout, withToolSpan, errorPayloadSchema } from "./shared";
 
 const getCaseInput = z.object({
+ judgment_id:z.number().int().positive().optional(),
+ start_position:z.number().int().min(0).optional(),
+ end_position:z.number().int().min(0).optional(),
+ reference_direction:z.enum(["incoming","outgoing","both","none"]).default("none"),
+ reference_limit:z.number().int().min(1).max(100).default(20),
+ reference_after:z.string().regex(/^\d{1,18}$/).optional().describe("Continue references after the previous nextReferenceId."),
+ legislation_after:z.string().regex(/^\d{1,18}$/).optional().describe("Continue legislation references after nextLegislationId."),
 	action_no: z.string().optional().describe("Case action number, e.g. the caseAct identifier."),
 	case_name: z.string().optional().describe("Party name or title fragment to match."),
 });
 type GetCaseInput = z.infer<typeof getCaseInput>;
 
 export const caseToolOutputSchema = z.union([
+ documentOutputSchema,
 	z.strictObject({
 		cases: z.array(z.strictObject({
 			caseAct: z.string(),
@@ -37,14 +46,19 @@ export type CaseToolOutput = z.infer<typeof caseToolOutputSchema>;
  */
 export const getCaseTool = tool({
 	description:
-		"Fetch a Hong Kong case by action number and/or party-name fragment, with linked judgments (citation, court, summary). Provide at least one argument.",
+		"Fetch a Hong Kong case by action number or party-name fragment with linked judgment summaries. When full-text retrieval is enabled, pass judgment_id and a bounded zero-based start_position/end_position range to fetch original paragraphs and optional incoming/outgoing references. Large responses explicitly report truncation; use narrower ranges or search passages for more context.",
 	inputSchema: getCaseInput,
 	outputSchema: caseToolOutputSchema,
 	execute: async (args: GetCaseInput): Promise<CaseToolOutput> => {
 		try {
 			return await withTimeout(
 				withToolSpan("tool:get_case", args, async () => {
-					if (!args.action_no?.trim() && !args.case_name?.trim()) {
+					if(args.judgment_id !== undefined) {
+ if(!fulltextEnabled()) return {error:"Judgment full text is disabled"};
+ if(args.start_position===undefined || args.end_position===undefined || args.end_position<args.start_position || args.end_position-args.start_position>=100) return {error:"Provide a bounded start_position/end_position range of at most 100 paragraphs"};
+ return getFulltext(args.judgment_id,args.start_position,args.end_position,args.reference_direction,args.reference_limit,args.reference_after,args.legislation_after);
+ }
+ if (!args.action_no?.trim() && !args.case_name?.trim()) {
 						return { error: "get_case: provide at least one of action_no or case_name" };
 					}
 					const cases = await prisma.case.findMany({

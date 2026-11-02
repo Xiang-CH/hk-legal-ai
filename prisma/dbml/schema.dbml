@@ -44,6 +44,8 @@ Table LegislationSection {
   referencedByJudgments Judgment [not null]
   relatedInterpretations Interpretation [not null]
   chunks legislation_chunks [not null]
+  referencedByJudgmentReferences judgment_legislation_references [not null]
+  managedJudgmentLinks judgment_managed_legislation_links [not null]
 
   indexes {
     (id, languageCode) [unique]
@@ -62,6 +64,8 @@ Table LegislationCap {
   childSections LegislationSection [not null]
   referencedByLegislationSections LegislationSection [not null]
   referencedByJudgments Judgment [not null]
+  referencedByJudgmentReferences judgment_legislation_references [not null]
+  managedJudgmentLinks judgment_managed_legislation_links [not null]
   relatedInterpretations Interpretation [not null]
   referencedByClicPages ClicPage [not null]
 
@@ -81,6 +85,7 @@ Table Interpretation {
 }
 
 Table Judgment {
+  document judgment_documents
   id Int [pk]
   neutralCitation String [not null]
   courtName String [not null]
@@ -108,6 +113,12 @@ Table Judgment {
   referencedByJudgments Judgment [not null]
   parallelCitations ParallelCitations [not null]
   chunks judgment_chunks [not null]
+  citationAliases judgment_citation_aliases [not null]
+  outgoingReferences judgment_references [not null]
+  incomingReferences judgment_references [not null]
+  legislationReferences judgment_legislation_references [not null]
+  managedLegislationLinks judgment_managed_legislation_links [not null]
+  fulltextChunks judgment_fulltext_chunks [not null]
 }
 
 Table ParallelCitations {
@@ -217,6 +228,197 @@ Table judgment_chunks {
   }
 }
 
+Table judgment_documents {
+  id BigInt [pk, increment]
+  judgmentId Int [unique, not null]
+  sourcePath String [unique, not null]
+  sourceChecksum String [not null]
+  rawHtml String [not null]
+  plainText String [not null]
+  parserVersion String [not null]
+  generation String [not null]
+  importedAt DateTime [default: `now()`, not null]
+  judgment Judgment [not null]
+  paragraphs judgment_paragraphs [not null]
+  fulltextChunks judgment_fulltext_chunks [not null]
+  activeFulltext judgment_fulltext_active
+}
+
+Table judgment_paragraphs {
+  id BigInt [pk, increment]
+  documentId BigInt [not null]
+  position Int [not null]
+  label String
+  anchor String
+  blockType String [not null]
+  content String [not null]
+  html String
+  document judgment_documents [not null]
+  referenceOccurrences judgment_reference_occurrences [not null]
+
+  indexes {
+    (documentId, position) [unique]
+  }
+}
+
+Table judgment_import_runs {
+  id String [pk]
+  root String [not null]
+  parserVersion String [not null]
+  status String [not null]
+  startedAt DateTime [default: `now()`, not null]
+  completedAt DateTime
+  files judgment_import_files [not null]
+}
+
+Table judgment_import_files {
+  id BigInt [pk, increment]
+  runId String [not null]
+  sourcePath String [not null]
+  sourceChecksum String
+  status String [not null]
+  attempts Int [not null, default: 1]
+  error String
+  completedAt DateTime [default: `now()`, not null]
+  run judgment_import_runs [not null]
+
+  indexes {
+    (runId, sourcePath) [unique]
+  }
+}
+
+Table judgment_citation_aliases {
+  id BigInt [pk, increment]
+  judgmentId Int [not null]
+  original String [not null]
+  normalized String [not null]
+  provenance Json [not null]
+  judgment Judgment [not null]
+
+  indexes {
+    (judgmentId, normalized, original) [unique]
+  }
+}
+
+Table judgment_references {
+  id BigInt [pk, increment]
+  sourceId Int [not null]
+  kind String [not null]
+  original String [not null]
+  normalized String [not null]
+  status String [not null]
+  targetId Int
+  candidates Json [not null, default: '[]']
+  provenance Json [not null]
+  resolverVersion String [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [default: `now()`, not null]
+  source Judgment [not null]
+  target Judgment
+  occurrences judgment_reference_occurrences [not null]
+
+  indexes {
+    (sourceId, kind, normalized) [unique]
+  }
+}
+
+Table judgment_reference_occurrences {
+  id BigInt [pk, increment]
+  referenceId BigInt [not null]
+  evidenceKey String [not null]
+  paragraphId BigInt
+  anchor String
+  evidence Json [not null]
+  reference judgment_references [not null]
+  paragraph judgment_paragraphs
+
+  indexes {
+    (referenceId, evidenceKey) [unique]
+  }
+}
+
+Table judgment_legislation_references {
+  id BigInt [pk, increment]
+  sourceId Int [not null]
+  original String [not null]
+  normalized String [not null]
+  status String [not null]
+  capId Int
+  sectionId Int
+  candidates Json [not null, default: '[]']
+  provenance Json [not null]
+  source Judgment [not null]
+  cap LegislationCap
+  section LegislationSection
+
+  indexes {
+    (sourceId, normalized) [unique]
+  }
+}
+
+Table judgment_fulltext_chunks {
+  id BigInt [pk, increment]
+  judgmentId Int [not null]
+  documentId BigInt [not null]
+  documentGeneration String [not null]
+  generation String [not null]
+  chunkNo Int [not null]
+  languageCode String [not null, default: 'en']
+  neutralCitation String
+  courtName String
+  year Int
+  date DateTime
+  parties String
+  summarySource String
+  url String
+  content String [not null]
+  embeddingInput String [not null]
+  contentChecksum String [not null]
+  inputChecksum String [not null]
+  chunkerVersion String [not null]
+  startPosition Int [not null]
+  endPosition Int [not null]
+  startOffset Int [not null]
+  endOffset Int [not null]
+  spans Json [not null]
+  tokenCount Int [not null]
+  model String [not null]
+  deployment String [not null]
+  modelVersion String [not null]
+  status String [not null, default: 'pending']
+  attempts Int [not null, default: 0]
+  error String
+  cjkTokens String [not null]
+  judgment Judgment [not null]
+  document judgment_documents [not null]
+
+  indexes {
+    (documentId, generation, chunkNo) [unique]
+  }
+}
+
+Table judgment_fulltext_active {
+  documentId BigInt [pk]
+  generation String [not null]
+  document judgment_documents [not null]
+}
+
+Table judgment_managed_legislation_links {
+  id BigInt [pk, increment]
+  sourceId Int [not null]
+  capId Int
+  sectionId Int
+  createdAt DateTime [default: `now()`, not null]
+  source Judgment [not null]
+  cap LegislationCap
+  section LegislationSection
+
+  indexes {
+    (sourceId, capId) [unique]
+    (sourceId, sectionId) [unique]
+  }
+}
+
 Table ClicPageRelationToClicPage {
   referencingpagesId Int [ref: > ClicPage.id]
   referencedbypagesId Int [ref: > ClicPage.id]
@@ -285,3 +487,37 @@ Ref: clic_chunks.(nid, languageCode) > ClicPage.(nid, languageCode) [delete: Cas
 Ref: chat_usage_events.previousId - chat_usage_events.id [delete: Set Null]
 
 Ref: judgment_chunks.judgmentId > Judgment.id [delete: Cascade]
+
+Ref: judgment_documents.judgmentId - Judgment.id [delete: Restrict]
+
+Ref: judgment_paragraphs.documentId > judgment_documents.id [delete: Cascade]
+
+Ref: judgment_import_files.runId > judgment_import_runs.id [delete: Cascade]
+
+Ref: judgment_citation_aliases.judgmentId > Judgment.id
+
+Ref: judgment_references.sourceId > Judgment.id
+
+Ref: judgment_references.targetId > Judgment.id
+
+Ref: judgment_reference_occurrences.referenceId > judgment_references.id [delete: Cascade]
+
+Ref: judgment_reference_occurrences.paragraphId > judgment_paragraphs.id [delete: Set Null]
+
+Ref: judgment_legislation_references.sourceId > Judgment.id
+
+Ref: judgment_legislation_references.capId > LegislationCap.id
+
+Ref: judgment_legislation_references.sectionId > LegislationSection.id
+
+Ref: judgment_fulltext_chunks.judgmentId > Judgment.id
+
+Ref: judgment_fulltext_chunks.documentId > judgment_documents.id [delete: Cascade]
+
+Ref: judgment_fulltext_active.documentId - judgment_documents.id [delete: Cascade]
+
+Ref: judgment_managed_legislation_links.sourceId > Judgment.id
+
+Ref: judgment_managed_legislation_links.capId > LegislationCap.id
+
+Ref: judgment_managed_legislation_links.sectionId > LegislationSection.id

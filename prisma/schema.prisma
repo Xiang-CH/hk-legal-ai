@@ -61,6 +61,8 @@ model LegislationSection {
   referencedByJudgments           Judgment[]
   relatedInterpretations          Interpretation[]
   chunks                          LegislationChunk[]
+  referencedByJudgmentReferences JudgmentLegislationReference[]
+  managedJudgmentLinks JudgmentManagedLegislationLink[]
 
   @@unique([id, languageCode])
   @@index([capNumber, sectionNumber, subsectionNumber, languageCode])
@@ -79,6 +81,8 @@ model LegislationCap {
   childSections                   LegislationSection[] @relation("ParentCap")
   referencedByLegislationSections LegislationSection[] @relation("LegislationSectionToLegislationCap")
   referencedByJudgments           Judgment[]
+  referencedByJudgmentReferences JudgmentLegislationReference[]
+  managedJudgmentLinks JudgmentManagedLegislationLink[]
   relatedInterpretations          Interpretation[]
   referencedByClicPages           ClicPage[]
 
@@ -100,6 +104,7 @@ model Interpretation {
 }
 
 model Judgment {
+  document                       JudgmentDocument?
   id                             Int                  @id
   neutralCitation                String
   courtName                      String
@@ -127,6 +132,12 @@ model Judgment {
   referencedByJudgments          Judgment[]           @relation("JudgmentToJudgment")
   parallelCitations              ParallelCitations[]
   chunks                         JudgmentChunk[]
+  citationAliases                JudgmentCitationAlias[]
+  outgoingReferences             JudgmentReference[] @relation("JudgmentReferenceSource")
+  incomingReferences             JudgmentReference[] @relation("JudgmentReferenceTarget")
+  legislationReferences          JudgmentLegislationReference[]
+  managedLegislationLinks JudgmentManagedLegislationLink[]
+  fulltextChunks                 JudgmentFulltextChunk[]
 }
 
 model ParallelCitations {
@@ -151,21 +162,21 @@ model Case {
 }
 
 model LegislationChunk {
-  id               BigInt                       @id @default(autoincrement())
-  sectionId        Int                          @map("section_id")
-  chunkNo          Int                          @map("chunk_no")
-  languageCode     String                       @map("language_code") // "en", "sc", "tc"
-  capNumber        String                       @map("cap_number")
-  sectionNumber    String                       @map("section_number")
-  subsectionNumber String?                      @map("subsection_number")
+  id               BigInt                        @id @default(autoincrement())
+  sectionId        Int                           @map("section_id")
+  chunkNo          Int                           @map("chunk_no")
+  languageCode     String                        @map("language_code") // "en", "sc", "tc"
+  capNumber        String                        @map("cap_number")
+  sectionNumber    String                        @map("section_number")
+  subsectionNumber String?                       @map("subsection_number")
   heading          String?
-  content          String                       @db.Text
+  content          String                        @db.Text
   url              String
-  context          String?                      @db.Text
+  context          String?                       @db.Text
   embedding        Unsupported("halfvec(3072)")?
   tsv              Unsupported("tsvector")?
-  cjkTokens        String?                      @map("cjk_tokens") @db.Text
-  section          LegislationSection           @relation(fields: [sectionId, languageCode], references: [id, languageCode], onDelete: Cascade, onUpdate: NoAction)
+  cjkTokens        String?                       @map("cjk_tokens") @db.Text
+  section          LegislationSection            @relation(fields: [sectionId, languageCode], references: [id, languageCode], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([sectionId, languageCode, chunkNo])
   @@index([sectionId, languageCode])
@@ -173,19 +184,19 @@ model LegislationChunk {
 }
 
 model ClicChunk {
-  id           BigInt                       @id @default(autoincrement())
+  id           BigInt                        @id @default(autoincrement())
   nid          Int
-  chunkNo      Int                          @map("chunk_no")
-  languageCode String                       @map("language_code") // "en", "sc", "tc"
+  chunkNo      Int                           @map("chunk_no")
+  languageCode String                        @map("language_code") // "en", "sc", "tc"
   title        String
-  content      String                       @db.Text
+  content      String                        @db.Text
   url          String
   topic        String
-  context      String?                      @db.Text
+  context      String?                       @db.Text
   embedding    Unsupported("halfvec(3072)")?
   tsv          Unsupported("tsvector")?
-  cjkTokens    String?                      @map("cjk_tokens") @db.Text
-  page         ClicPage                     @relation(fields: [nid, languageCode], references: [nid, languageCode], onDelete: Cascade, onUpdate: NoAction)
+  cjkTokens    String?                       @map("cjk_tokens") @db.Text
+  page         ClicPage                      @relation(fields: [nid, languageCode], references: [nid, languageCode], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([nid, languageCode, chunkNo])
   @@index([nid, languageCode])
@@ -193,9 +204,9 @@ model ClicChunk {
 }
 
 model ChatUsageEvent {
-  id         String @id @default(cuid())
-  sessionId  String @map("session_id")
-  turnIndex  Int    @map("turn_index")
+  id         String  @id @default(cuid())
+  sessionId  String  @map("session_id")
+  turnIndex  Int     @map("turn_index")
   previousId String? @unique @map("previous_id")
 
   previous ChatUsageEvent? @relation("ChatUsageEventChain", fields: [previousId], references: [id], onDelete: SetNull, onUpdate: NoAction)
@@ -225,24 +236,223 @@ model ChatUsageEvent {
 }
 
 model JudgmentChunk {
-  id              BigInt                       @id @default(autoincrement())
-  judgmentId      Int                          @map("judgment_id")
-  chunkNo         Int                          @map("chunk_no")
-  languageCode    String                       @map("language_code") // "en", "sc", "tc"
-  neutralCitation String?                      @map("neutral_citation")
-  courtName       String?                      @map("court_name")
+  id              BigInt                        @id @default(autoincrement())
+  judgmentId      Int                           @map("judgment_id")
+  chunkNo         Int                           @map("chunk_no")
+  languageCode    String                        @map("language_code") // "en", "sc", "tc"
+  neutralCitation String?                       @map("neutral_citation")
+  courtName       String?                       @map("court_name")
   year            Int?
   date            DateTime?
-  parties         String?                      @db.Text
-  content         String                       @db.Text
-  summarySource   String?                      @map("summary_source")
+  parties         String?                       @db.Text
+  content         String                        @db.Text
+  summarySource   String?                       @map("summary_source")
   url             String?
   embedding       Unsupported("halfvec(3072)")?
   tsv             Unsupported("tsvector")?
-  cjkTokens       String?                      @map("cjk_tokens") @db.Text
-  judgment        Judgment                     @relation(fields: [judgmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  cjkTokens       String?                       @map("cjk_tokens") @db.Text
+  judgment        Judgment                      @relation(fields: [judgmentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([judgmentId, chunkNo])
   @@index([judgmentId])
   @@map("judgment_chunks")
+}
+
+model JudgmentDocument {
+  id             BigInt              @id @default(autoincrement())
+  judgmentId     Int                 @unique @map("judgment_id")
+  sourcePath     String              @unique @map("source_path")
+  sourceChecksum String              @map("source_checksum")
+  rawHtml        String              @map("raw_html") @db.Text
+  plainText      String              @map("plain_text") @db.Text
+  parserVersion  String              @map("parser_version")
+  generation     String              @db.Uuid
+  importedAt     DateTime            @default(now()) @map("imported_at") @db.Timestamptz(6)
+  judgment       Judgment            @relation(fields: [judgmentId], references: [id], onDelete: Restrict)
+  paragraphs     JudgmentParagraph[]
+  fulltextChunks JudgmentFulltextChunk[]
+  activeFulltext JudgmentFulltextActive?
+
+  @@map("judgment_documents")
+}
+
+model JudgmentParagraph {
+  id         BigInt           @id @default(autoincrement())
+  documentId BigInt           @map("document_id")
+  position   Int
+  label      String?
+  anchor     String?
+  blockType  String           @map("block_type")
+  content    String           @db.Text
+  html       String?          @db.Text
+  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  referenceOccurrences JudgmentReferenceOccurrence[]
+
+  @@unique([documentId, position])
+  @@map("judgment_paragraphs")
+}
+
+model JudgmentImportRun {
+  id            String               @id @db.Uuid
+  root          String
+  parserVersion String               @map("parser_version")
+  status        String
+  startedAt     DateTime             @default(now()) @map("started_at") @db.Timestamptz(6)
+  completedAt   DateTime?            @map("completed_at") @db.Timestamptz(6)
+  files         JudgmentImportFile[]
+
+  @@map("judgment_import_runs")
+}
+
+model JudgmentImportFile {
+  id             BigInt            @id @default(autoincrement())
+  runId          String            @map("run_id") @db.Uuid
+  sourcePath     String            @map("source_path")
+  sourceChecksum String?           @map("source_checksum")
+  status         String
+  attempts       Int               @default(1)
+  error          String?           @db.Text
+  completedAt    DateTime          @default(now()) @map("completed_at") @db.Timestamptz(6)
+  run            JudgmentImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, sourcePath])
+  @@map("judgment_import_files")
+}
+
+model JudgmentCitationAlias {
+  id         BigInt   @id @default(autoincrement())
+  judgmentId Int      @map("judgment_id")
+  original   String   @db.Text
+  normalized String   @db.Text
+  provenance Json
+  judgment   Judgment @relation(fields: [judgmentId], references: [id])
+
+  @@unique([judgmentId, normalized, original])
+  @@index([normalized])
+  @@map("judgment_citation_aliases")
+}
+
+model JudgmentReference {
+  id          BigInt   @id @default(autoincrement())
+  sourceId    Int      @map("source_id")
+  kind        String   @db.Text
+  original    String   @db.Text
+  normalized  String   @db.Text
+  status      String   @db.Text
+  targetId    Int?     @map("target_id")
+  candidates  Json     @default("[]")
+  provenance  Json
+  resolverVersion String @map("resolver_version") @db.Text
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  source      Judgment @relation("JudgmentReferenceSource", fields: [sourceId], references: [id])
+  target      Judgment? @relation("JudgmentReferenceTarget", fields: [targetId], references: [id])
+  occurrences JudgmentReferenceOccurrence[]
+
+  @@unique([sourceId, kind, normalized])
+  @@index([targetId])
+  @@index([normalized])
+  @@map("judgment_references")
+}
+
+model JudgmentReferenceOccurrence {
+  id          BigInt @id @default(autoincrement())
+  referenceId BigInt @map("reference_id")
+  evidenceKey String @map("evidence_key") @db.Text
+  paragraphId BigInt? @map("paragraph_id")
+  anchor      String? @db.Text
+  evidence    Json
+  reference   JudgmentReference @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+  paragraph   JudgmentParagraph? @relation(fields: [paragraphId], references: [id], onDelete: SetNull)
+
+  @@unique([referenceId, evidenceKey])
+  @@index([paragraphId])
+  @@map("judgment_reference_occurrences")
+}
+
+model JudgmentLegislationReference {
+  id          BigInt @id @default(autoincrement())
+  sourceId    Int @map("source_id")
+  original    String @db.Text
+  normalized  String @db.Text
+  status      String @db.Text
+  capId       Int? @map("cap_id")
+  sectionId   Int? @map("section_id")
+  candidates  Json @default("[]")
+  provenance  Json
+  source      Judgment @relation(fields: [sourceId], references: [id])
+  cap         LegislationCap? @relation(fields: [capId], references: [id])
+  section     LegislationSection? @relation(fields: [sectionId], references: [id])
+
+  @@unique([sourceId, normalized])
+  @@index([capId])
+  @@index([sectionId])
+  @@map("judgment_legislation_references")
+}
+
+model JudgmentFulltextChunk {
+  id                 BigInt @id @default(autoincrement())
+  judgmentId         Int @map("judgment_id")
+  documentId         BigInt @map("document_id")
+  documentGeneration String @map("document_generation") @db.Text
+  generation         String @db.Text
+  chunkNo            Int @map("chunk_no")
+  languageCode       String @default("en") @map("language_code") @db.Text
+  neutralCitation    String? @map("neutral_citation") @db.Text
+  courtName          String? @map("court_name") @db.Text
+  year               Int?
+  date               DateTime? @db.Timestamptz(6)
+  parties            String? @db.Text
+  summarySource      String? @map("summary_source") @db.Text
+  url                String? @db.Text
+  content            String @db.Text
+  embeddingInput     String @map("embedding_input") @db.Text
+  contentChecksum    String @map("content_checksum") @db.Text
+  inputChecksum      String @map("input_checksum") @db.Text
+  chunkerVersion     String @map("chunker_version") @db.Text
+  startPosition      Int @map("start_position")
+  endPosition        Int @map("end_position")
+  startOffset        Int @map("start_offset")
+  endOffset          Int @map("end_offset")
+  spans              Json
+  tokenCount         Int @map("token_count")
+  model              String @db.Text
+  deployment         String @db.Text
+  modelVersion       String @map("model_version") @db.Text
+  status             String @default("pending") @db.Text
+  attempts           Int @default(0)
+  error              String? @db.Text
+  embedding          Unsupported("halfvec(3072)")?
+  tsv                Unsupported("tsvector")?
+  cjkTokens          String @map("cjk_tokens") @db.Text
+  judgment           Judgment @relation(fields: [judgmentId], references: [id])
+  document           JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, generation, chunkNo])
+  @@index([documentId, generation, status])
+  @@index([inputChecksum, model, deployment, modelVersion])
+  @@map("judgment_fulltext_chunks")
+}
+
+model JudgmentFulltextActive {
+  documentId BigInt @id @map("document_id")
+  generation String @db.Text
+  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("judgment_fulltext_active")
+}
+
+model JudgmentManagedLegislationLink {
+  id BigInt @id @default(autoincrement())
+  sourceId Int @map("source_id")
+  capId Int? @map("cap_id")
+  sectionId Int? @map("section_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  source Judgment @relation(fields: [sourceId], references: [id])
+  cap LegislationCap? @relation(fields: [capId], references: [id])
+  section LegislationSection? @relation(fields: [sectionId], references: [id])
+
+  @@unique([sourceId,capId])
+  @@unique([sourceId,sectionId])
+  @@map("judgment_managed_legislation_links")
 }
