@@ -184,7 +184,24 @@ log to `/tmp` unless overridden):
 | `cjk.ts` | Shared CJK bigram tokenizer |
 | `copy-next-static.mjs` | Post-build asset copy for the SWA mount path |
 | `upsert_clic_selection.py` | `pnpm upsert-clic` — import a CLIC selection spreadsheet |
+| `index-clic-selection.mjs` | Chunk, embed and index only selected English CLIC nids; resumable checkpoint |
 | `smoke-agentic.mjs` | Golden-conversation smoke suite |
+
+新增 CLIC 页面的完整操作流程见 [add-clic-pages skill](.agents/skills/add-clic-pages/SKILL.md)。
+
+For Joyce's new-page batch, select **Column C (`2nd_id`) 2759–2973 inclusive**
+from the updated content list, rather than Excel row numbers or Drupal `nid`:
+
+```bash
+pnpm upsert-clic --xlsx /path/to/updated-content-list.xlsx --add-lo 2759 --add-hi 2973 --insert-only --dry-run
+pnpm upsert-clic --xlsx /path/to/updated-content-list.xlsx --add-lo 2759 --add-hi 2973 --insert-only --require-no-drop --apply
+```
+
+The importer rejects an incomplete ID range before accessing the database.
+The local `CLIC Content List_20260924.xlsx` ends at `2nd_id` 2806 and cannot
+supply this complete batch. After importing, run the chunk, embedding, and
+chunk-load stages before the new pages become searchable.
+
 
 ## Smoke tests
 

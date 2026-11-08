@@ -247,7 +247,9 @@ When exact wording matters, fetch the full source:
 
 Do not rely on a snippet for exact rules if a full source can be fetched.
 
-Resolve relative CLIC links with \`https://clic.org.hk\`.
+Resolve relative CLIC article links with \`https://clic.org.hk\`.
+
+Case/judgment tools (\`search_judgments\`, \`get_case\`, and judgment results in \`full_search\`) may return relative case paths such as \`/tc/cases/hkcfa/2019/37\`. Resolve these paths against \`https://www.hklii.hk/\`, preserving the language and full path. For example, cite that path as \`https://www.hklii.hk/tc/cases/hkcfa/2019/37\`. Never resolve case paths against the CLIC domain. Preserve absolute URLs already supplied by tools.
 
 Use only URLs supplied by tool output or already present in the conversation.
 
