@@ -16,7 +16,7 @@ export const Navbar = () => {
   const { isDevMode, toggleDevMode, isLoaded } = useDevMode();
 
   return (
-    <NavigationMenu className="max-w-full w-full justify-between px-4 border-b gap-4 box-border">
+    <NavigationMenu className="max-w-full w-full shrink-0 justify-between px-4 border-b gap-4 box-border">
       <div className="flex items-center">
         <NavigationMenuList>
           <NavigationMenuItem>

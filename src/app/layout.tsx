@@ -25,7 +25,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head></head>
-      <body className={cn(GeistSans.className, "antialiased max-h-screen overflow-hidden")}>
+      <body className={cn(GeistSans.className, "antialiased flex h-dvh flex-col overflow-hidden")}>
         <Toaster position="top-center" richColors />
         <DevModeProvider>
           <ThemeProvider

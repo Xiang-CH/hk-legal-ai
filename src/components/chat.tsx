@@ -212,10 +212,6 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
 
     const lastMessage = messages[messages.length - 1];
     if (lastMessage.role === "user") {
-      if (messagesContainerRef.current) {
-        messagesContainerRef.current.style.paddingBottom = "82%";
-      }
-
       const element = messageRefs.current.get(lastMessage.id);
       if (element) {
         scrollToElement(element);
@@ -224,7 +220,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   }, [messages, scrollToElement, messagesContainerRef]);
 
   return (
-    <div className="flex h-[calc(100dvh-37px)] max-h-[calc(100dvh-37px)] w-full">
+    <div className="flex min-h-0 flex-1 w-full">
 
       {/* History sidebar (desktop) */}
       {sidebarOpen && (
@@ -399,7 +395,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
           viewportRef={messagesContainerRef}
           className="min-w-0 min-h-0 flex-1"
         >
-          <div className="flex min-w-0 flex-col gap-6 pt-1 pb-36">
+          <div className="flex min-w-0 flex-col gap-6 pt-1 pb-6 md:pb-36">
             {messages.length === 0 && <Overview />}
 
             {messages.map((message) => (
@@ -435,7 +431,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
           </div>
         </ScrollArea>
 
-        <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full max-w-3xl">
+        <form className="flex shrink-0 mx-auto px-4 bg-background pb-[max(0.25rem,env(safe-area-inset-bottom))] md:pb-6 gap-2 w-full max-w-3xl">
           <MultimodalInput
             chatId={chatId}
             draftId={activeId ?? undefined}

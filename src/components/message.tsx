@@ -296,7 +296,7 @@ const PreviewMessage = React.forwardRef<
         )}
       >
         {message.role === "assistant" && (textContent || hasReasoningContent || toolParts.length > 0) && (
-          <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
+          <div className="hidden size-8 items-center rounded-full justify-center ring-1 shrink-0 ring-border md:flex">
             <SparklesIcon size={14} />
           </div>
         )}
@@ -436,7 +436,7 @@ export const ThinkingMessage = ({
           }
         )}
       >
-        <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
+        <div className="hidden size-8 items-center rounded-full justify-center ring-1 shrink-0 ring-border md:flex">
           <SparklesIcon size={14} />
         </div>
 
