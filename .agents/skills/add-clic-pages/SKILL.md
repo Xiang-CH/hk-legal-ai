@@ -55,19 +55,18 @@ pnpm upsert-clic --xlsx /path/to/content-list.xlsx --add-lo 2759 --add-hi 2973 -
 
 ## 生成搜索数据
 
-先读 [README 数据流程](../../../README.md) 和以下脚本，确认运行范围及凭据来源：
+优先使用 `scripts/index-clic-selection.mjs`，将已核查的批次映射保存为 JSON 数组，每项至少包含整数 `nid`。该脚本限定英文、本批次 nid，只为没有分块的页面生成搜索数据：
 
-| 阶段 | 现有脚本 | 使用前要确认 |
-| --- | --- | --- |
-| 分块 | `scripts/index-clic.ts` | 按语言读取全部 CLIC 页面，生成 `scripts/index-output/chunks-{lang}.json`；512 token、128 overlap、`o200k_base` |
-| 向量 | `scripts/embed-clic-judgment.mjs` | 复用内容匹配的缓存和续跑 sidecar；除指定语言外也处理 sc/tc 和 judgment 文件 |
-| 入库与索引 | `scripts/load-existing-chunks.mjs` | 读取多语言 CLIC 和 judgment JSON；judgment 文件当前为必需输入；冲突行保留原值，随后填充 tsv/CJK 并创建缺失索引 |
+```bash
+node --env-file=/path/to/.env scripts/index-clic-selection.mjs selection.json checkpoint.json
+node --env-file=/path/to/.env scripts/index-clic-selection.mjs selection.json checkpoint.json --apply
+```
 
-这三个脚本不是只处理本次新增页面的流水线。CLIC 单批任务中，先确认全量输入及处理范围都属于当前任务；否则给脚本增加明确的语言、nid 或语料范围选项后再运行。保留现有向量模型、维度和分块规则，使新旧数据兼容。
+第一次命令只查询数据库并报告计划。`--apply` 才调用 embedding 服务和写入分块。checkpoint 放入 `scripts/index-output/` 等 git 忽略目录，保留到验证完成以便失败续跑。模型来自 `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`，默认 `text-embedding-3-large`；脚本验证 3072 维，使用现有 512 token、128 overlap、`o200k_base` 分块规则。分块与英文 tsv 在同一事务中写入，随后核验每个选中页面都有完整分块。
 
-运行 TypeScript 分块器前确认本机 TS runner、Prisma 生成客户端和依赖已就绪。分块器需要进程中的 `DATABASE_URL`；向量和加载脚本当前会直接读取 repo 根目录 `.env`。不要假设给一个脚本设置环境变量就能满足全部阶段。
+此脚本保留已有分块；用于页面更新时，先核对导入器已清除需替换的旧分块。它不会修复已有但不完整的分块，也不创建数据库基础索引。若核验失败，先调查记录再处理，避免把部分数据当作完成。
 
-新分块必须具有完整 embedding 才能入库。缓存仅在文本一致时复用。`load-existing-chunks.mjs` 使用 `ON CONFLICT DO NOTHING`；它不会替换已存在的旧分块。若任务包括更新页面，导入器会清除这些页面的旧分块，需要完成重新生成和加载后才算更新完成。
+全量流程见 [README 数据流程](../../../README.md)：`index-clic.ts`、`embed-clic-judgment.mjs`、`load-existing-chunks.mjs` 会涉及更多语言或 judgment 输入，仅在任务确实需要全量处理时使用。
 
 ## 验证与交付
 

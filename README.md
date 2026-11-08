@@ -184,6 +184,7 @@ log to `/tmp` unless overridden):
 | `cjk.ts` | Shared CJK bigram tokenizer |
 | `copy-next-static.mjs` | Post-build asset copy for the SWA mount path |
 | `upsert_clic_selection.py` | `pnpm upsert-clic` — import a CLIC selection spreadsheet |
+| `index-clic-selection.mjs` | Chunk, embed and index only selected English CLIC nids; resumable checkpoint |
 | `smoke-agentic.mjs` | Golden-conversation smoke suite |
 
 新增 CLIC 页面的完整操作流程见 [add-clic-pages skill](.agents/skills/add-clic-pages/SKILL.md)。
