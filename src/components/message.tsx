@@ -181,6 +181,28 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
   );
 }
 
+function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
+  const [open, setOpen] = React.useState(false);
+  const completed = parts.filter((part) => part.state === "output-available").length;
+  const failed = parts.filter((part) => toolState(part).failed).length;
+  const active = parts.findLast((part) => toolState(part).pending);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 rounded-xl border border-border/70 px-3 py-2">
+      <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 text-left text-xs text-muted-foreground">
+        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", !open && "-rotate-90")} />
+        <span className="min-w-0 flex-1">
+          Search progress: {completed}/{parts.length} completed{failed > 0 && ` · ${failed} failed`}
+        </span>
+        <span className="shrink-0">{open ? "Hide details" : "Show details"}</span>
+      </CollapsibleTrigger>
+      {!open && active && <div className="mt-2"><ToolProgress part={active} /></div>}
+      <CollapsibleContent className="max-h-64 space-y-2 overflow-y-auto pt-3">
+        {parts.map((part) => <ToolProgress key={part.toolCallId} part={part} />)}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   // Collapsed by default; stay open while streaming so live thinking is visible.
   const [expanded, setExpanded] = React.useState(false);
@@ -256,6 +278,7 @@ const PreviewMessage = React.forwardRef<
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
   const completedToolCount = toolParts.filter((part) => part.state === "output-available").length;
+  const collapseToolProgress = toolParts.length > 4;
 
   if (message.role === "user" && !hasTextContent) return null;
   if (
@@ -333,6 +356,11 @@ const PreviewMessage = React.forwardRef<
               }
 
               if (isChatToolPart(part)) {
+                if (collapseToolProgress) {
+                  return part.toolCallId === toolParts[0]?.toolCallId
+                    ? <SearchProgress key="search-progress" parts={toolParts} />
+                    : null;
+                }
                 return <ToolProgress key={part.toolCallId} part={part} />;
               }
 
@@ -355,7 +383,7 @@ const PreviewMessage = React.forwardRef<
               return null;
             })}
 
-          {message.role === "assistant" && toolParts.length > 0 && (
+          {message.role === "assistant" && toolParts.length > 0 && !collapseToolProgress && (
             <div className="text-xs text-muted-foreground">
               Search progress: {completedToolCount}/{toolParts.length} completed
             </div>
