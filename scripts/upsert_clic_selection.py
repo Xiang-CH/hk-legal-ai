@@ -401,6 +401,7 @@ def print_drop_report(dburl, ref_plan, id_map, sec_index, cap_ids):
     return total_dropped
 
 def main():
+    """Validate the filtered selection, then plan or atomically apply page/reference writes."""
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", default="/Users/cxiang/Downloads/CLIC Content List_20260924.xlsx")
     ap.add_argument("--lang", default="en")
@@ -438,14 +439,6 @@ def main():
     if a.add_lo is None and not update_ids and not a.all:
         ap.error("no selection: pass --add-lo/--add-hi, --update-ids, and/or --all")
     selected, path_map = read_selection(a.xlsx, a.add_lo, a.add_hi, update_ids, a.all)
-    if a.add_lo is not None:
-        present = {s["second_id"] for s in selected}
-        missing = sorted(set(range(a.add_lo, a.add_hi + 1)) - present)
-        if missing:
-            sys.exit(
-                f"Incomplete 2nd_id range {a.add_lo}-{a.add_hi}: "
-                f"missing {len(missing)} ID(s), first: {missing[:10]}. "
-                "Use the complete content list. No database reads or writes performed.")
     print(f"Excel selection: {len(selected)} rows")
     scoped = []
     for s in selected:
@@ -461,6 +454,14 @@ def main():
         if a.include_junk or not junk:
             scoped.append(s)
     print(f"Skipped junk/empty/struck: {len(selected) - len(scoped)}")
+    if a.add_lo is not None:
+        present = {s["second_id"] for s in scoped}
+        missing = sorted(set(range(a.add_lo, a.add_hi + 1)) - present)
+        if missing:
+            sys.exit(
+                f"Incomplete 2nd_id range {a.add_lo}-{a.add_hi}: "
+                f"missing {len(missing)} ID(s), first: {missing[:10]}. "
+                "Use the complete content list. No database reads or writes performed.")
 
     env = load_dotenv(os.path.join(os.getcwd(), ".env"))
     dburl = os.environ.get("DATABASE_URL") or env.get("DATABASE_URL")

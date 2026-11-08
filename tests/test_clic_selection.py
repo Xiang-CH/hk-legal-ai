@@ -17,11 +17,25 @@ spec.loader.exec_module(cli)
 class SelectionTests(unittest.TestCase):
     def test_incomplete_range_stops_before_database(self):
         with patch.object(sys, 'argv', ['import', '--add-lo', '2759', '--add-hi', '2973']), \
-             patch.object(cli, 'read_selection', return_value=([{'second_id': 2759}], {})), \
+             patch.object(cli, 'read_selection', return_value=([{'second_id': 2759, 'nid': 3544, 'content_html': '<p>Content</p>', 'struck': False, 'url': 'https://clic.org.hk/en/topics/test', 'title': 'Page'}], {})), \
              patch.object(cli, 'load_dotenv') as config:
             with self.assertRaisesRegex(SystemExit, 'missing 214 ID'):
                 cli.main()
             config.assert_not_called()
+
+    def test_filtered_row_cannot_satisfy_requested_range(self):
+        """Every requested ID must survive filtering before database access."""
+        valid = {'second_id': 2759, 'nid': 3544, 'content_html': '<p>Content</p>',
+                 'struck': False, 'url': 'https://clic.org.hk/en/topics/test', 'title': 'Page'}
+        for change in [{'content_html': ''}, {'struck': True}, {'result_flag': 'Delete'},
+                       {'url': ''}, {'url': 'https://clic.org.hk/en/invalid'}, {'title': ''}]:
+            with self.subTest(change=change), \
+                 patch.object(sys, 'argv', ['import', '--add-lo', '2759', '--add-hi', '2759', '--apply']), \
+                 patch.object(cli, 'read_selection', return_value=([{**valid, **change}], {})), \
+                 patch.object(cli, 'load_dotenv', return_value={}) as config:
+                with self.assertRaisesRegex(SystemExit, 'missing 1 ID'):
+                    cli.main()
+                config.assert_not_called()
 
     def test_reversed_range_stops_before_reading_spreadsheet(self):
         with patch.object(sys, 'argv', ['import', '--add-lo', '2973', '--add-hi', '2759']), \
