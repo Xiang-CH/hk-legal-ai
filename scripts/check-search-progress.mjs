@@ -11,7 +11,7 @@ try {
  for(const scenario of ['short','completed','running','failed']){
   const count=scenario==='short'?4:12;
   const parts=Array.from({length:count},(_,index)=>({type:'tool-search_judgments',toolCallId:`tool-${index}`,input:{query:`query ${index}`},state:'output-available',output:{results:[]}}));
-  if(scenario==='running')parts[11]={...parts[11],state:'input-available'};
+  if(scenario==='running')parts[0]={...parts[0],state:'input-available'};
   if(scenario==='failed')parts[11]={...parts[11],state:'output-error',errorText:'Test failure'};
   const messages=[{id:'user',role:'user',parts:[{type:'text',text:'Test search progress'}]},{id:'assistant',role:'assistant',parts:[...parts,{type:'text',text:'Answer remains visible'}]}];
   browser(['eval',`localStorage.setItem('clic-chat:conversations:v1',JSON.stringify([{id:'progress-test',title:'Progress test',createdAt:1,updatedAt:1}]));localStorage.setItem('clic-chat:messages:progress-test:v1',${JSON.stringify(JSON.stringify(messages))})`]);
@@ -23,7 +23,8 @@ try {
    const rows=()=>document.querySelectorAll('[data-pending]').length;
    if(${count}===4){if(toggle||rows()!==4)throw Error('Short progress should remain inline');return 'Short progress passed';}
    if(!toggle||toggle.getAttribute('aria-expanded')!=='false')throw Error('Long progress should start collapsed');
-   if(rows()!==${scenario==='running'?1:0})throw Error('Collapsed progress should expose only the current activity');
+   if(rows()!==3)throw Error('Collapsed progress should show three steps');
+   if(${scenario==='running'}&&document.querySelectorAll('[data-pending="true"]').length!==1)throw Error('An earlier running step must remain visible');
    if(${scenario==='failed'}&&!toggle.textContent.includes('1 failed'))throw Error('Failure must remain visible in the summary');
    toggle.click();return 'Collapsed ${scenario} progress passed';
   })()`]);

@@ -185,7 +185,10 @@ function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
   const [open, setOpen] = React.useState(false);
   const completed = parts.filter((part) => part.state === "output-available").length;
   const failed = parts.filter((part) => toolState(part).failed).length;
-  const active = parts.findLast((part) => toolState(part).pending);
+  const previewParts = [
+    ...parts.filter((part) => !toolState(part).pending),
+    ...parts.filter((part) => toolState(part).pending),
+  ].slice(-3);
   return (
     <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 rounded-xl border border-border/70 px-3 py-2">
       <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 text-left text-xs text-muted-foreground">
@@ -195,7 +198,11 @@ function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
         </span>
         <span className="shrink-0">{open ? "Hide details" : "Show details"}</span>
       </CollapsibleTrigger>
-      {!open && active && <div className="mt-2"><ToolProgress part={active} /></div>}
+      {!open && (
+        <div className="mt-2 space-y-2">
+          {previewParts.map((part) => <ToolProgress key={part.toolCallId} part={part} />)}
+        </div>
+      )}
       <CollapsibleContent className="max-h-64 space-y-2 overflow-y-auto pt-3">
         {parts.map((part) => <ToolProgress key={part.toolCallId} part={part} />)}
       </CollapsibleContent>
