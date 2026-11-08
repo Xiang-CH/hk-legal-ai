@@ -61,9 +61,13 @@ export const judgmentToolOutputSchema = z.union([
 ]);
 export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 
+/** Use lexical full text when available, then preserve summary retrieval if full-text storage or the embedding provider is unavailable. */
 async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<JudgmentToolOutput> {
 	if (fulltextEnabled()) {
-		const hits = await searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined));
+		const hits = await searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)).catch((error: unknown) => {
+      console.error("Judgment lexical full-text search failed; preserving summary fallback", { message: error instanceof Error ? error.message : "Unknown error" });
+      return [];
+    });
 		if (hits.length) return { results: hits.slice(0, RERANK_TOP_JUDGMENT).map(hit => ({
 			judgmentId: hit.judgmentId, chunk_no: hit.chunk_no, neutralCitation: hit.neutralCitation,
 			courtName: hit.courtName, year: hit.year, caseAct: null, caseTitle: hit.parties ?? hit.neutralCitation,

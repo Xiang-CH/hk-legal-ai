@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { checksum } from './source.mjs';
+/** Validate the explicit target and backup/restore evidence before writes. Only local disposable databases may bypass a backup. */
 export async function verifyWriteAccess({ apply = false, testDatabase = false, ackBackup,allowProduction=false,restoreReceipt,acceptAzureAiOmission=false,databaseUrl = process.env.JUDGMENT_DATABASE_URL } = {}) {
   if (!databaseUrl) throw new Error('JUDGMENT_DATABASE_URL is required; .env is not loaded');
   const url = new URL(databaseUrl);
@@ -21,7 +22,7 @@ export async function verifyWriteAccess({ apply = false, testDatabase = false, a
       if(!local){
         if(!restoreReceipt)throw Error('A verified application-data restore receipt is required');
         const receipt=JSON.parse(await readFile(restoreReceipt,'utf8'));
-        if(receipt.archiveSha256!==manifest.sha256||receipt.source!==manifest.source||receipt.applicationDataRestored!==true||receipt.strictTransactionalRestore!==true||receipt.target===manifest.source||!receipt.tables||receipt.tables.Judgment<1)throw Error('Restore receipt does not verify this backup');
+        if(receipt.archiveSha256!==manifest.sha256||receipt.source!==manifest.source||receipt.applicationDataRestored!==true||receipt.strictTransactionalRestore!==true||receipt.target===manifest.source||!receipt.tables||!Number.isSafeInteger(receipt.tables.Judgment)||receipt.tables.Judgment<1)throw Error('Restore receipt does not verify this backup');
         const omissions=receipt.omittedExtensions??[];
         if(omissions.some(extension=>extension!=='azure_ai')||(omissions.length&&!acceptAzureAiOmission))throw Error('Restore extension omission requires explicit acceptance');
       }

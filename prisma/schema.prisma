@@ -268,11 +268,12 @@ model JudgmentDocument {
   parserVersion  String              @map("parser_version")
   generation     String              @db.Uuid
   importedAt     DateTime            @default(now()) @map("imported_at") @db.Timestamptz(6)
-  judgment       Judgment            @relation(fields: [judgmentId], references: [id], onDelete: Restrict)
+  judgment       Judgment            @relation(fields: [judgmentId], references: [id], onDelete: Restrict, onUpdate: NoAction)
   paragraphs     JudgmentParagraph[]
   fulltextChunks JudgmentFulltextChunk[]
   activeFulltext JudgmentFulltextActive?
 
+  @@unique([id, judgmentId])
   @@map("judgment_documents")
 }
 
@@ -285,7 +286,7 @@ model JudgmentParagraph {
   blockType  String           @map("block_type")
   content    String           @db.Text
   html       String?          @db.Text
-  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   referenceOccurrences JudgmentReferenceOccurrence[]
 
   @@unique([documentId, position])
@@ -313,7 +314,7 @@ model JudgmentImportFile {
   attempts       Int               @default(1)
   error          String?           @db.Text
   completedAt    DateTime          @default(now()) @map("completed_at") @db.Timestamptz(6)
-  run            JudgmentImportRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run            JudgmentImportRun @relation(fields: [runId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([runId, sourcePath])
   @@map("judgment_import_files")
@@ -325,7 +326,7 @@ model JudgmentCitationAlias {
   original   String   @db.Text
   normalized String   @db.Text
   provenance Json
-  judgment   Judgment @relation(fields: [judgmentId], references: [id])
+  judgment   Judgment @relation(fields: [judgmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([judgmentId, normalized, original])
   @@index([normalized])
@@ -345,8 +346,8 @@ model JudgmentReference {
   resolverVersion String @map("resolver_version") @db.Text
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
-  source      Judgment @relation("JudgmentReferenceSource", fields: [sourceId], references: [id])
-  target      Judgment? @relation("JudgmentReferenceTarget", fields: [targetId], references: [id])
+  source      Judgment @relation("JudgmentReferenceSource", fields: [sourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  target      Judgment? @relation("JudgmentReferenceTarget", fields: [targetId], references: [id], onDelete: NoAction, onUpdate: NoAction)
   occurrences JudgmentReferenceOccurrence[]
 
   @@unique([sourceId, kind, normalized])
@@ -362,8 +363,8 @@ model JudgmentReferenceOccurrence {
   paragraphId BigInt? @map("paragraph_id")
   anchor      String? @db.Text
   evidence    Json
-  reference   JudgmentReference @relation(fields: [referenceId], references: [id], onDelete: Cascade)
-  paragraph   JudgmentParagraph? @relation(fields: [paragraphId], references: [id], onDelete: SetNull)
+  reference   JudgmentReference @relation(fields: [referenceId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  paragraph   JudgmentParagraph? @relation(fields: [paragraphId], references: [id], onDelete: SetNull, onUpdate: NoAction)
 
   @@unique([referenceId, evidenceKey])
   @@index([paragraphId])
@@ -380,9 +381,9 @@ model JudgmentLegislationReference {
   sectionId   Int? @map("section_id")
   candidates  Json @default("[]")
   provenance  Json
-  source      Judgment @relation(fields: [sourceId], references: [id])
-  cap         LegislationCap? @relation(fields: [capId], references: [id])
-  section     LegislationSection? @relation(fields: [sectionId], references: [id])
+  source      Judgment @relation(fields: [sourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cap         LegislationCap? @relation(fields: [capId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  section     LegislationSection? @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([sourceId, normalized])
   @@index([capId])
@@ -425,8 +426,8 @@ model JudgmentFulltextChunk {
   embedding          Unsupported("halfvec(3072)")?
   tsv                Unsupported("tsvector")?
   cjkTokens          String @map("cjk_tokens") @db.Text
-  judgment           Judgment @relation(fields: [judgmentId], references: [id])
-  document           JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  judgment           Judgment @relation(fields: [judgmentId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  document           JudgmentDocument @relation(fields: [documentId, judgmentId], references: [id, judgmentId], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([documentId, generation, chunkNo])
   @@index([documentId, generation, status])
@@ -437,7 +438,7 @@ model JudgmentFulltextChunk {
 model JudgmentFulltextActive {
   documentId BigInt @id @map("document_id")
   generation String @db.Text
-  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  document   JudgmentDocument @relation(fields: [documentId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@map("judgment_fulltext_active")
 }
@@ -448,9 +449,9 @@ model JudgmentManagedLegislationLink {
   capId Int? @map("cap_id")
   sectionId Int? @map("section_id")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  source Judgment @relation(fields: [sourceId], references: [id])
-  cap LegislationCap? @relation(fields: [capId], references: [id])
-  section LegislationSection? @relation(fields: [sectionId], references: [id])
+  source Judgment @relation(fields: [sourceId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cap LegislationCap? @relation(fields: [capId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  section LegislationSection? @relation(fields: [sectionId], references: [id], onDelete: NoAction, onUpdate: NoAction)
 
   @@unique([sourceId,capId])
   @@unique([sourceId,sectionId])

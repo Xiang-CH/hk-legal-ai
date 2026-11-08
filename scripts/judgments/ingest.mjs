@@ -6,6 +6,7 @@ import { walk, parseSourcePath, checksum, validateShape } from './source.mjs';
 import { parseJudgment, PARSER_VERSION } from './parse.mjs';
 import { verifyWriteAccess } from './db.mjs';
 import { clearManagedLinks } from './legislation-links.mjs';
+/** Import checksum-matched source documents transactionally per judgment; quarantine failures and preserve the previous generation. Dry runs never write. */
 export async function importCorpus({client, root, apply=false, limit=Infinity, ...safety}) {
   await verifyWriteAccess({apply,...safety});
   if (!root || !(limit >= 0)) throw new Error('root and nonnegative limit required');
@@ -65,6 +66,7 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, .
   finally {if(apply)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[root]).catch(()=>{});}
   return {runId,outcomes};
 }
+/** Parse bounded import options, validate write authorization and close the explicit database connection. */
 async function main() {
   const args=process.argv.slice(2), options={};
   for(let _index=0;_index<args.length;_index++) {

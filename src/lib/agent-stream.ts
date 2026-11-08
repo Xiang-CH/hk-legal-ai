@@ -90,6 +90,7 @@ function source({
   };
 }
 
+/** Validate supported tool outputs and map citation metadata, including full-text paragraph ranges, to source seeds. */
 export function mapToolOutputToSources(toolName: SearchToolName, output: unknown): SourceSeed[] {
   switch (toolName) {
     case "search_clic": {

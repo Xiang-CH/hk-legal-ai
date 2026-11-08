@@ -1,6 +1,6 @@
 # Judgment full-text pipeline
 
-This feature is opt-in. Keep `JUDGMENT_FULLTEXT_ENABLED` unset until the target database has the four additive migrations and a verified pilot. Existing summary data and its unique keys remain untouched. Full text uses a separate chunk table so rollback cannot delete summary embeddings or break existing summary loaders.
+This feature is opt-in. Keep `JUDGMENT_FULLTEXT_ENABLED` unset until the target database has the five additive migrations and a verified pilot. Existing summary data and its unique keys remain untouched. Full text uses a separate chunk table so rollback cannot delete summary embeddings or break existing summary loaders.
 
 ## Current evidence
 
@@ -77,6 +77,6 @@ The pilot command accepts `--source SOURCE --audit AUDIT.jsonl --output /tmp/PIL
 
 ## Outstanding rollout work
 
-Finish the free full-corpus token estimate, verify an exact restore in a compatible Azure environment, and obtain full-corpus embedding/rollout approval. Azure currently reports 32 GiB storage with auto-grow disabled. Capacity validation must include text, paragraph/reference tables, vectors, HNSW/GIN indexes, temporary build space and WAL, not just the raw-vector lower bound. Any capacity increase requires approval before rollout. Production write safeguards remain closed until those gates pass. Preserve the original source files and all rejected-file reports. Never mark missing text or unresolved authorities as successfully imported/resolved.
+The free full-corpus estimate and file reconciliation are complete. Production already has the five additive migrations and verified 26-document pilot. Full-corpus embedding approval was declined, and the capacity increase remains unapproved. Production currently has 32 GiB storage with auto-grow disabled; the proposed allocation is 128 GiB based on sample measurements including text, paragraphs, references and search indexes, with additional operational headroom required. Full-corpus execution must wait for the required approvals. An exact restore including Azure-specific extension metadata remains unverified; the user accepted the tested application-data restore with azure_ai metadata omitted for the production pilot. Any future Azure restore resource requires separate approval. Preserve the original source files and all rejected-file reports. Never mark missing text or unresolved authorities as successfully imported/resolved.
 
 See `judgment-rollback.md` for recovery. Backups must live in a durable, access-controlled directory outside version control, not only in `/tmp`. Manual schema rollback requires migration-history reconciliation before reinstallation.

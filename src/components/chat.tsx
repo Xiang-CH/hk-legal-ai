@@ -187,7 +187,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   };
 
   const [messagesContainerRef, scrollToElement] =
-    useScroll<HTMLDivElement>();
+    useScroll<HTMLDivElement>(isBusy);
 
   const lastMessage = messages[messages.length - 1];
   const lastAssistantMessage = lastMessage?.role === "assistant" ? lastMessage : undefined;

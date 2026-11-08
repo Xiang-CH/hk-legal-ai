@@ -8,12 +8,14 @@ import path from 'node:path';
 const usage = 'Usage: backup.mjs backup <archive> | restore <archive> --target-url-env JUDGMENT_RESTORE_DATABASE_URL --ack-disposable';
 const args = process.argv.slice(2);
 function fail(message) { throw new Error(message); }
+/** Read a PostgreSQL URL from a named environment variable and reject unsupported connection schemes. */
 function envUrl(name) {
   if (!name || !/^[A-Z][A-Z0-9_]*$/.test(name)) fail('Provide a valid environment variable name.');
   const value = process.env[name];
   if (!value) fail(`Required environment variable ${name} is not set.`);
   try { const url = new URL(value); if(!['postgres:','postgresql:'].includes(url.protocol)) fail('Invalid protocol'); return url; } catch { fail(`Environment variable ${name} is not a valid PostgreSQL URL.`); }
 }
+/** Compare normalized host, port and database identities without retaining credentials. */
 function identity(url) {
   const host = (url.hostname || '').toLowerCase().replace(/^\[(.*)\]$/, '$1');
   const port = url.port || '5432';
@@ -21,7 +23,9 @@ function identity(url) {
   if (!host || !db) fail('Database URL must include host and database name.');
   return `${host}:${port}/${db.toLowerCase()}`;
 }
+/** Build PostgreSQL client arguments without placing passwords on the process command line. */
 function safeArgs(url) { return ['--host', url.hostname, '--port', url.port || '5432', '--username', decodeURIComponent(url.username), '--dbname', decodeURIComponent(url.pathname.slice(1))]; }
+/** Run PostgreSQL tooling with credentials in the child environment and suppress potentially sensitive failure output. */
 function run(bin, argv, url) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env, PGPASSWORD: decodeURIComponent(url.password), PGSSLMODE: url.searchParams.get('sslmode') || process.env.PGSSLMODE || 'prefer' };
@@ -33,7 +37,9 @@ function run(bin, argv, url) {
     child.on('close', code => code === 0 ? resolve(Buffer.concat(out)) : reject(new Error(`${bin} failed with exit code ${code}${err}`)));
   });
 }
+/** Calculate the archive checksum using streaming reads. */
 async function sha(file) { const _hasher = createHash('sha256'); for await (const _buffer2 of createReadStream(file)) _hasher.update(_buffer2); return _hasher.digest('hex'); }
+/** Create an exclusive verified archive, or transactionally restore a checksum-matched archive into an acknowledged disposable database. */
 async function main() {
   const [mode, file, ...opts] = args;
   if (!mode || !file || !['backup', 'restore'].includes(mode)) fail(usage);

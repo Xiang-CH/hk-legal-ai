@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { parseSourcePath, walk, checksum, validateShape } from './source.mjs';
 
 const args = process.argv.slice(2);
+/** Read a CLI option or its fallback; reject a flag without its required value. */
 function option(name, fallback) {
   const index = args.indexOf(name);
   if (index < 0) return fallback;
@@ -19,6 +20,7 @@ const index = new Map();
 const seen = new Set();
 let client;
 let stream;
+let streamError;
 try {
   if (process.env.JUDGMENT_DATABASE_URL) {
     const { Client } = await import('pg');
@@ -34,7 +36,8 @@ try {
     }
   }
   stream = output === '-' ? process.stdout : fs.createWriteStream(path.resolve(output), { flags: 'wx', mode: 0o600 });
-  stream.on('error', error => { process.stderr.write(`Audit output error: ${error.code ?? 'unknown'}\n`); });
+  stream.on('error', error => { streamError = error; });
+  if (output !== '-') await once(stream, 'open');
   for await (const file of walk(root)) {
     const info = parseSourcePath(root, file);
     if (!info) continue;
@@ -62,7 +65,8 @@ try {
         } else row.status = 'validated-sidecar';
       } catch (error) { row.status = 'invalid'; row.reason = error instanceof SyntaxError ? 'invalid-json' : 'read-failed'; totals.invalid++; }
     }
-    if (!stream.write(JSON.stringify(row) + '\n')) await once(stream, 'drain');
+    if (streamError) throw streamError;
+    await new Promise((resolve,reject) => stream.write(JSON.stringify(row) + '\n', error => error ? reject(error) : resolve()));
   }
   if (client) for (const [key, rows] of index) if (!seen.has(key)) totals.databaseRowsWithoutSource += rows.length;
   const summary = { ...totals, sourceDirectory: root, reconciliation: Boolean(client) };
@@ -73,5 +77,6 @@ try {
     await fs.promises.writeFile(`${output}.summary.json`, JSON.stringify(summary, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
   }
 } finally {
+  if (stream && stream !== process.stdout && !stream.writableFinished) stream.destroy();
   if (client) { await client.query('ROLLBACK').catch(() => {}); await client.end(); }
 }

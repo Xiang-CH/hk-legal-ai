@@ -242,6 +242,10 @@ Table judgment_documents {
   paragraphs judgment_paragraphs [not null]
   fulltextChunks judgment_fulltext_chunks [not null]
   activeFulltext judgment_fulltext_active
+
+  indexes {
+    (id, judgmentId) [unique]
+  }
 }
 
 Table judgment_paragraphs {
@@ -494,30 +498,30 @@ Ref: judgment_paragraphs.documentId > judgment_documents.id [delete: Cascade]
 
 Ref: judgment_import_files.runId > judgment_import_runs.id [delete: Cascade]
 
-Ref: judgment_citation_aliases.judgmentId > Judgment.id
+Ref: judgment_citation_aliases.judgmentId > Judgment.id [delete: No Action]
 
-Ref: judgment_references.sourceId > Judgment.id
+Ref: judgment_references.sourceId > Judgment.id [delete: No Action]
 
-Ref: judgment_references.targetId > Judgment.id
+Ref: judgment_references.targetId > Judgment.id [delete: No Action]
 
 Ref: judgment_reference_occurrences.referenceId > judgment_references.id [delete: Cascade]
 
 Ref: judgment_reference_occurrences.paragraphId > judgment_paragraphs.id [delete: Set Null]
 
-Ref: judgment_legislation_references.sourceId > Judgment.id
+Ref: judgment_legislation_references.sourceId > Judgment.id [delete: No Action]
 
-Ref: judgment_legislation_references.capId > LegislationCap.id
+Ref: judgment_legislation_references.capId > LegislationCap.id [delete: No Action]
 
-Ref: judgment_legislation_references.sectionId > LegislationSection.id
+Ref: judgment_legislation_references.sectionId > LegislationSection.id [delete: No Action]
 
-Ref: judgment_fulltext_chunks.judgmentId > Judgment.id
+Ref: judgment_fulltext_chunks.judgmentId > Judgment.id [delete: No Action]
 
-Ref: judgment_fulltext_chunks.documentId > judgment_documents.id [delete: Cascade]
+Ref: judgment_fulltext_chunks.(documentId, judgmentId) > judgment_documents.(id, judgmentId) [delete: Cascade]
 
 Ref: judgment_fulltext_active.documentId - judgment_documents.id [delete: Cascade]
 
-Ref: judgment_managed_legislation_links.sourceId > Judgment.id
+Ref: judgment_managed_legislation_links.sourceId > Judgment.id [delete: No Action]
 
-Ref: judgment_managed_legislation_links.capId > LegislationCap.id
+Ref: judgment_managed_legislation_links.capId > LegislationCap.id [delete: No Action]
 
-Ref: judgment_managed_legislation_links.sectionId > LegislationSection.id
+Ref: judgment_managed_legislation_links.sectionId > LegislationSection.id [delete: No Action]

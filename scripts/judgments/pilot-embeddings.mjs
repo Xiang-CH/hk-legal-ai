@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { writeFile } from 'node:fs/promises';
+import { open } from 'node:fs/promises';
 import pg from 'pg';
 import { getEncoding } from 'js-tiktoken';
 import { azureEmbed } from './embed.mjs';
@@ -10,6 +10,8 @@ if(!process.argv.includes('--approve-cost'))throw Error('Explicit pilot cost app
 const url=await verifyWriteAccess({apply:true,testDatabase:true});
 const output=process.argv.find(value=>value.startsWith('--output='))?.slice('--output='.length);
 if(!output)throw Error('--output=NEW_REPORT required');
+const reportFile=await open(output,'wx',0o600);
+try {
 const priceUrl=new URL('https://prices.azure.com/api/retail/prices');
 priceUrl.searchParams.set('$filter',"contains(meterName, 'embedding')");
 const priceResponse=await fetch(priceUrl);
@@ -50,7 +52,8 @@ try{
   await client.query('COMMIT');
  }catch(error){await client.query('ROLLBACK');throw error;}
  const report={completedAt:new Date().toISOString(),approvedUsd,priceSource:priceUrl.href,retailCeilingUsdPerMillion:pricePerMillion,estimatedInputTokens:estimatedTokens,provider,estimatedRetailCostUsd:(provider?.usage?.total_tokens??estimatedTokens)*pricePerMillion/1000000,embeddedPassages:rows.length,queries:tests.length,results,allPassed:results.every(result=>result.passed),productionUnchanged:true};
- await writeFile(output,JSON.stringify(report,null,2),{flag:'wx',mode:0o600});
+ await reportFile.writeFile(JSON.stringify(report,null,2));
  console.log(JSON.stringify(report,null,2));
  assert(report.allPassed,'Semantic pilot failed; inspect report');
 }finally{await client.end();}
+} finally { await reportFile.close(); }

@@ -18,6 +18,7 @@ const hitSchema = _schema.object({
  lexical_rank: _schema.number().nullable(), vector_distance: _schema.number().nullable(), rrf_score: _schema.number(),
  ...sourceFields,
 });
+/** Search only active current-generation chunks, combining lexical ranking with an optional caller-supplied embedding. */
 export async function searchFulltext(query: string, tokens: string, embedding: number[] | null, languages: string[]) {
  if (embedding && (embedding.length !== 3072 || !embedding.every(Number.isFinite))) throw new Error("Invalid query embedding");
  const rows = await prisma.$queryRawUnsafe<unknown>(`
@@ -65,6 +66,7 @@ export const documentOutputSchema = _schema.object({
  nextLegislationId:_schema.string().nullable(),
  truncated:_schema.boolean(),
 });
+/** Return bounded source paragraphs and independently paginated reference directions for one judgment. */
 export async function getFulltext(id:number,start:number,end:number,direction:"incoming"|"outgoing"|"both"|"none",limit:number,referenceAfter="0",legislationAfter="0") {
  const documents = _schema.array(documentOutputSchema.shape.document).parse(await prisma.$queryRawUnsafe<unknown>(
  'SELECT d.id::text,d.judgment_id,d.generation::text,d.source_path,d.parser_version,j.url,j."neutralCitation" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id WHERE d.judgment_id=$1',id));

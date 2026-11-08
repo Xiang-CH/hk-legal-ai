@@ -9,6 +9,7 @@ import { walk, parseSourcePath, checksum } from './source.mjs';
 
 const VERSION = 'references-2';
 const normalize = value => String(value).normalize('NFC').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase().replace(/^\[(\d{4})\]\s*(HK[A-Z]+)\s*(\d+)$/, '[$1] $2 $3');
+/** Normalize supported HKLII aliases to a case path while rejecting non-HTTP links. */
 const urlKey = value => {
   try {
     const url = new URL(value, 'https://hklii.hk');
@@ -23,6 +24,7 @@ const neutral = /\[\d{4}\]\s+HK[A-Z]+\s+\d+/gi;
 const reported = /(?:\[\d{4}\]|\(\d{4}\))\s+\d+\s+(?:HKLRD|HKCFAR|HKC)\s+\d+/gi;
 const foreign = /\[\d{4}\]\s+(?:(?:UKSC|UKHL|UKPC|EWHC|EWCA(?:\s+(?:Civ|Crim))?)\s+\d+|(?:\d+\s+)?(?:AC|WLR|All\s+ER|QB|Ch)\s+\d+)|\(\d{4}\)\s+\d+\s+(?:CLR|FCR)\s+\d+|\b\d+\s+U\.S\.\s+\d+/gi;
 const action = /\b[A-Z]{2,8}\s*\d+[A-Z]?\s*\/\s*\d{4}\b/g;
+/** Extract citation and link evidence from judgment HTML, excluding non-content elements. */
 function inspect(html) {
   const found = [];
   function visit(node, anchor = null) {
@@ -41,6 +43,7 @@ function inspect(html) {
   visit(parse(html));
   return found;
 }
+/** Resolve one decision with a preferred language; retain candidate IDs when identity or language is ambiguous. */
 function choose(rows, language) {
   const decisions = new Set(rows.map(_row => normalize(_row.neutralCitation || `${_row.courtName}/${_row.year}/${_row.number}`)));
   if (!rows.length) return {status:'not-in-corpus',target:null,candidates:[]};
@@ -51,6 +54,7 @@ function choose(rows, language) {
 }
 const values = _value => Array.isArray(_value) ? _value.filter(_value2=>typeof _value2==='string') : [];
 
+/** Resolve current-generation evidence per document, retaining ambiguous/pending references and provenance. Apply mode replaces each source transactionally. */
 export async function resolveReferences({client,root,limit=Infinity,apply=false,outcomeLimit=1000}) {
   if (!root || !(limit===Infinity || Number.isSafeInteger(limit) && limit>=0)) throw new Error('root and nonnegative integer limit required');
   const judgments = (await client.query('SELECT id,"neutralCitation","courtName",year,number,"languageCode",url,"legalrefUrl" FROM "Judgment"')).rows;
@@ -166,7 +170,11 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
         let result = choose(matches,source.languageCode);
         if(_referenceEvidence3.kind==='action-number')result={status:'pending',target:null,candidates:caseCandidates.get(key.replace(/\s/g,''))??[]};
         if(_referenceEvidence3.method==='noteup' && !_referenceEvidence3.confirmed) result={...result,status:'pending',target:null};
-        if(result.target===source.id || result.candidates.length && result.candidates.every(id=>normalize(byId.get(id)?.neutralCitation)===normalize(source.neutralCitation))) result={...result,status:'self',target:null};
+        const sourceCitation=normalize(source.neutralCitation);
+        if(result.target===source.id || sourceCitation && result.candidates.length && result.candidates.every(id=>{
+          const targetCitation=normalize(byId.get(id)?.neutralCitation);
+          return targetCitation && targetCitation===sourceCitation;
+        })) result={...result,status:'self',target:null};
         if(_referenceEvidence3.kind==='url' && !matches.length && !/judg|legalref|\/cases\//i.test(_referenceEvidence3.original)) continue;
         if(apply) {
           const identity=referenceKey(_referenceEvidence3.kind,key);
@@ -198,6 +206,7 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
   return {apply,version:VERSION,counts,outcomes};
 }
 
+/** Read bounded current-generation references and occurrence evidence in the requested direction. */
 export async function readReferences(client,judgmentId,{direction='outgoing',limit=20}={}) {
   if(!['incoming','outgoing'].includes(direction) || !Number.isSafeInteger(limit) || limit<0 || limit>200) throw new Error('direction must be incoming/outgoing; limit must be 0..200');
   const references = await client.query(`SELECT r.* FROM judgment_references r JOIN judgment_documents d ON d.judgment_id=r.source_id AND r.provenance->>'generation'=d.generation::text WHERE ${direction==='incoming'?"r.target_id=$1 AND r.status='resolved'":"r.source_id=$1 AND r.status<>'self'"} ORDER BY r.id LIMIT $2`,[judgmentId,limit]);
@@ -206,10 +215,11 @@ export async function readReferences(client,judgmentId,{direction='outgoing',lim
   return {direction,references:references.rows,occurrences:occurrences.rows,legislation:legislation.rows};
 }
 
+/** Validate CLI safety flags before opening the database; dry runs use a read-only transaction. */
 async function main() {
-  const {values:options}=parseArgs({options:{dir:{type:'string'},limit:{type:'string'},apply:{type:'boolean',default:false},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'}}});
+  const {values:options}=parseArgs({options:{dir:{type:'string'},limit:{type:'string'},apply:{type:'boolean',default:false},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'},'allow-production':{type:'boolean',default:false},'restore-receipt':{type:'string'},'accept-azure-ai-omission':{type:'boolean',default:false}}});
   if(!options.dir)throw Error('--dir required');
-  const connectionString=await verifyWriteAccess({apply:options.apply,testDatabase:options['test-database'],ackBackup:options['ack-backup']});
+  const connectionString=await verifyWriteAccess({apply:options.apply,testDatabase:options['test-database'],ackBackup:options['ack-backup'],allowProduction:options['allow-production'],restoreReceipt:options['restore-receipt'],acceptAzureAiOmission:options['accept-azure-ai-omission']});
   const {Client}=await import('pg');
   const client=new Client({connectionString});await client.connect();
   try {

@@ -30,10 +30,12 @@ const toolLabels = {
   "tool-ask_question": "Clarifying question",
 } satisfies Record<ChatToolPart["type"], string>;
 
+/** Narrow a message part to the interactive question tool variant. */
 function isAskQuestionPart(part: MessagePart): part is AskQuestionPart {
   return part.type === "tool-ask_question";
 }
 
+/** Recognize the supported retrieval tool parts used by progress rendering. */
 function isChatToolPart(part: MessagePart): part is ChatToolPart {
   return (
     part.type === "tool-search_clic" ||
@@ -45,16 +47,19 @@ function isChatToolPart(part: MessagePart): part is ChatToolPart {
   );
 }
 
+/** Validate object-shaped tool data before reading unknown output fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Read object-shaped tool input without assuming fields from an external message. */
 function toolInput(part: ChatToolPart): Record<string, unknown> | null {
   if (!("input" in part)) return null;
   const input: unknown = (part as { input?: unknown }).input;
   return isRecord(input) ? input : null;
 }
 
+/** Extract a nonempty string field from validated tool input. */
 function stringField(input: Record<string, unknown> | null, key: string): string | null {
   if (!input) return null;
   const value = input[key];
@@ -105,6 +110,7 @@ function toolInputSummary(part: ChatToolPart): string | null {
   }
 }
 
+/** Count recognized result arrays while leaving unknown output shapes uncounted. */
 function toolResultCount(part: ChatToolPart): number | null {
   if (part.state !== "output-available") return null;
   const output: unknown = part.output;
@@ -120,6 +126,7 @@ function toolResultCount(part: ChatToolPart): number | null {
   return null;
 }
 
+/** Map streaming tool states to a visible label plus pending/failure indicators. */
 function toolState(part: ChatToolPart): { label: string; pending: boolean; failed: boolean } {
   switch (part.state) {
     case "input-streaming":
@@ -152,6 +159,7 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
   }
 }
 
+/** Render one bounded progress row with its query, completion status and available result count. */
 function ToolProgress({ part }: { part: ChatToolPart }) {
   const state = toolState(part);
   const keywords = toolInputSummary(part);
@@ -181,6 +189,7 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
   );
 }
 
+/** Collapse long tool groups to three recent steps, retaining pending work and an expandable failure summary. */
 function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
   const [open, setOpen] = React.useState(false);
   const completed = parts.filter((part) => part.state === "output-available").length;
@@ -210,6 +219,7 @@ function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
   );
 }
 
+/** Render reasoning in an accessible disclosure with the current streaming state. */
 function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   // Collapsed by default; stay open while streaming so live thinking is visible.
   const [expanded, setExpanded] = React.useState(false);

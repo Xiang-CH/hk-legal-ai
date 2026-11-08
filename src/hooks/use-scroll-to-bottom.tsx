@@ -1,33 +1,48 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 
-export function useScroll<T extends HTMLElement>(): [
+/** Follow content changes while busy and near the bottom; pause when the user scrolls away and resume after returning. */
+export function useScroll<T extends HTMLElement>(followChanges = false): [
   RefObject<T | null>,
   (element: HTMLElement) => void,
 ] {
   const containerRef = useRef<T>(null);
+  const following = useRef(true);
 
-  const scrollToElement = (element: HTMLElement) => {
+  const scrollToElement = useCallback((element: HTMLElement) => {
+    following.current = true;
     element.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
-  };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
 
-    if (container) {
+    if (container && followChanges) {
+      let frame = 0;
+      const onScroll = () => {
+        following.current = container.scrollHeight - container.clientHeight - container.scrollTop < 64;
+      };
+      container.addEventListener("scroll", onScroll, { passive: true });
       const observer = new MutationObserver(() => {
-        // No direct scrolling here, scrolling is handled by scrollToElement
+        if (!following.current) return;
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => {
+          if (following.current) container.scrollTop = container.scrollHeight;
+        });
       });
 
       observer.observe(container, {
         childList: true,
         subtree: true,
-        attributes: true,
         characterData: true,
       });
 
-      return () => observer.disconnect();
+      return () => {
+        observer.disconnect();
+        cancelAnimationFrame(frame);
+        container.removeEventListener("scroll", onScroll);
+      };
     }
-  }, []);
+  }, [followChanges]);
 
   return [containerRef, scrollToElement];
 }

@@ -1,10 +1,9 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { createBrowserCheck } from './browser-check.mjs';
 
-const session=`clic-progress-${process.pid}`;
 const url=new URL(process.env.CHAT_LAYOUT_URL??'http://localhost:3210/clic-chat-hkulaw/c');
 if(!['localhost','127.0.0.1'].includes(url.hostname))throw Error('Local test app required');
-const browser=args=>execFileSync('agent-browser',['--session',session,...args],{encoding:'utf8'});
+const {browser,close}=createBrowserCheck('clic-progress');
 try {
  browser(['set','viewport','390','844']);
  browser(['open',url.href]);
@@ -34,4 +33,4 @@ try {
    browser(['eval',`if(document.querySelectorAll('[data-pending]').length!==12)throw Error('Expanded progress must show every step')`]);
   }
  }
-} finally {browser(['close']);}
+} finally {close();}

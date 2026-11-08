@@ -14,7 +14,7 @@
     "db:push": "prisma db push",
     "db:format": "prisma format",
     "db:studio": "prisma studio",
-    "db:studio:drizzle": "node --env-file=.env scripts/judgments/studio.mjs",
+    "db:studio:drizzle": "node --env-file=.env --env-file-if-exists=.env.studio scripts/judgments/studio.mjs",
     "upsert-clic": "uvx --with openpyxl --with markdownify python scripts/upsert_clic_selection.py"
   },
   "dependencies": {

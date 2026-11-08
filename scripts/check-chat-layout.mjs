@@ -1,9 +1,8 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
+import { createBrowserCheck } from './browser-check.mjs';
 
-const session=`clic-layout-${process.pid}`;
 const url=process.env.CHAT_LAYOUT_URL??'http://localhost:3210/clic-chat-hkulaw/c';
-const browser=args=>execFileSync('agent-browser',['--session',session,...args],{encoding:'utf8'});
+const {browser,close}=createBrowserCheck('clic-layout');
 try {
  for(const [width,height] of [[390,844],[430,932],[1280,800]]){
   browser(['set','viewport',String(width),String(height)]);
@@ -21,4 +20,4 @@ try {
   })()`]);
   process.stdout.write(result);
  }
-} finally { browser(['close']); }
+} finally { close(); }

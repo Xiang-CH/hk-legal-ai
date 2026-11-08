@@ -7,6 +7,7 @@ const leafBlocks = new Set(['p','table','li','h1','h2','h3','h4','h5','h6','pre'
 const attribute = (node,name) => node.attrs?.find(entry=>entry.name===name)?.value;
 const children = node => node.childNodes ?? [];
 const descendants = node => children(node).flatMap(child=>[child,...descendants(child)]);
+/** Recognize a structural paragraph marker without treating arbitrary inline numbers as paragraph labels. */
 const markerLabel = node => {
   if(node.tagName!=='a')return null;
   const anchor=attribute(node,'id') || attribute(node,'name') || '';
@@ -15,6 +16,7 @@ const markerLabel = node => {
   if(!/(?:^|\s)para(?:\s|$)/i.test(attribute(node,'class') || ''))return null;
   return nodeText(node).trim().match(/^(?:\[(\d+[A-Za-z]?)\]|(\d+[A-Za-z]?)[.)]?)$/)?.slice(1).find(Boolean) ?? null;
 };
+/** Collect visible node text while preserving line breaks and excluding scripts, styles and navigation. */
 function nodeText(node) {
   if(excluded.has(node.tagName))return '';
   if(node.nodeName==='#text')return node.value;
@@ -26,6 +28,7 @@ function nodeText(node) {
 const clean = value => value.replace(/\s+/g,' ').trim();
 const findAnchor = node => attribute(node,'id') || attribute(node,'name') || children(node).map(findAnchor).find(Boolean) || null;
 
+/** Convert judgment HTML into ordered content blocks with source anchors and printed paragraph labels; keep unnumbered text and tables. */
 export function parseJudgment(html) {
   if(typeof html!=='string'||!html.trim())throw Error('Empty HTML');
   const root=parse(html);

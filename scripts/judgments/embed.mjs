@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { verifyWriteAccess } from './db.mjs';
 import { getEncoding } from 'js-tiktoken';
 const billingTokenizer=getEncoding('cl100k_base');
+/** Embed a bounded pending batch under an explicit token budget, caching identical inputs and persisting retries without activating stale generations. */
 export async function embedPending({client,embed,batchSize=8,limit=100,apply=false,approveCost=false,maxTokens=0,retries=3,testProvider=false,beforeRequest}) {
  if(!Number.isInteger(batchSize)||batchSize<1||!Number.isInteger(limit)||limit<1||!Number.isInteger(retries)||retries<0) throw Error('Invalid bounds');
  if(testProvider && process.env.NODE_ENV==='production') throw Error('Test provider prohibited in production');
@@ -48,6 +49,7 @@ export async function embedPending({client,embed,batchSize=8,limit=100,apply=fal
  }
  return {ready,failed,requests,tokens:spent};
 }
+/** Call the configured Azure embedding deployment and validate response count/dimensions; report provider usage through the callback. */
 export async function azureEmbed(inputs,{deployment,onUsage}) {
  const endpoint=process.env.AZURE_OPENAI_ENDPOINT, key=process.env.AZURE_OPENAI_KEY;
  if(!endpoint||!key) throw Error('Azure endpoint/key required');

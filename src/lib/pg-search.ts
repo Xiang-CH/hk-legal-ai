@@ -170,6 +170,12 @@ FROM fused f JOIN clic_chunks c ON c.id = f.id`,
 
 /** Q2: judgment_chunks — same shape, no topic filter. */
 export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): Promise<JudgmentChunkHit[]> {
+ const fulltextPromise = fulltextEnabled()
+  ? searchFulltext(query,cjkTokens(query),opts.embedding,resolveLanguageCodes(query,opts.languageCodes)).catch((error: unknown) => {
+   console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
+   return [];
+  })
+  : Promise.resolve([]);
 	const summaries = await runFusion<JudgmentChunkHit>({
 		table: "judgment_chunks",
 		query,
@@ -184,7 +190,7 @@ export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): P
 FROM fused f JOIN judgment_chunks c ON c.id = f.id`,
 	});
  if (!fulltextEnabled()) return summaries;
- const fulltext = await searchFulltext(query,cjkTokens(query),opts.embedding,resolveLanguageCodes(query,opts.languageCodes));
+ const fulltext = await fulltextPromise;
  const selected: JudgmentChunkHit[] = [];
  for (const hit of [...summaries,...fulltext].sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
   if(hit.documentId && selected.some(other => other.documentId===hit.documentId && other.startPosition!==undefined && other.endPosition!==undefined && hit.startPosition!==undefined && hit.endPosition!==undefined && other.startPosition<=hit.endPosition && hit.startPosition<=other.endPosition)) continue;

@@ -5,7 +5,9 @@ import { verifyWriteAccess } from './db.mjs';
 const tokenizer = getEncoding('o200k_base');
 export const hash = _textValue => createHash('sha256').update(_textValue).digest('hex');
 export const tokens = _textValue2 => tokenizer.encode(_textValue2).length;
+/** Produce adjacent Han-character bigrams plus Latin tokens for bilingual lexical matching. */
 export const cjk = _textValue3 => (_textValue3.match(/[\p{Script=Han}]+/gu) ?? []).flatMap(word => word.length < 2 ? [word] : Array.from({length:word.length-1},(_unused,index)=>word.slice(index,index+2))).concat(_textValue3.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ');
+/** Split ordered blocks into bounded, overlapping chunks with exact source spans and metadata-prefixed embedding inputs. */
 export function buildChunks(blocks, metadata = {}, options = {}) {
  const target = options.targetTokens ?? 600, max = options.maxTokens ?? 800;
  if (!(target > 0 && target <= max && max <= 800)) throw Error('Invalid token limits');
@@ -43,6 +45,7 @@ export function buildChunks(blocks, metadata = {}, options = {}) {
  }
  flush(); return result;
 }
+/** Generate a bounded document batch, reusing matching inputs and publishing only the selected current generation in apply mode. */
 export async function generateChunks({client,limit=100,afterId=0,apply=false,...options}) {
  if(!Number.isSafeInteger(limit)||limit<1||!Number.isSafeInteger(afterId)||afterId<0)throw Error('Invalid pagination bounds');
  const documents=(await client.query('SELECT id,judgment_id FROM judgment_documents WHERE id>$1 ORDER BY id LIMIT $2',[afterId,limit])).rows;
@@ -79,6 +82,7 @@ export async function generateChunks({client,limit=100,afterId=0,apply=false,...
  }
  return {documents:documents.length,chunks:count,tokens:totalTokens,lastDocumentId};
 }
+/** Search active current-generation chunks lexically, optionally fusing supplied vector distances. */
 export async function searchChunks({client,query,embedding,limit=10}) {
  if(embedding && (embedding.length!==3072||!embedding.every(Number.isFinite))) throw Error('Invalid vector');
  return (await client.query(`SELECT c.*, ts_rank_cd(c.tsv,plainto_tsquery('english',$1)) + ts_rank_cd(to_tsvector('simple',c.cjk_tokens),plainto_tsquery('simple',$2)) ${embedding?'+ COALESCE(1-(c.embedding <=> $4::halfvec),0)':''} AS score FROM judgment_fulltext_chunks c JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation JOIN judgment_documents d ON d.id=c.document_id AND d.generation::text=c.document_generation WHERE ${embedding?"c.status='ready' OR ":''}(c.tsv @@ plainto_tsquery('english',$1) OR to_tsvector('simple',c.cjk_tokens) @@ plainto_tsquery('simple',$2)) ORDER BY score DESC,c.id LIMIT $3`,embedding?[query,cjk(query),limit,JSON.stringify(embedding)]:[query,cjk(query),limit])).rows;
