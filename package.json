@@ -22,6 +22,7 @@
     "@ai-sdk/openai": "4.0.72",
     "@ai-sdk/react": "4.0.112",
     "@hookform/resolvers": "^5.2.2",
+    "@langchain/core": "0.3.62",
     "@langchain/textsplitters": "^0.1.0",
     "@langfuse/otel": "^5.11.1",
     "@langfuse/tracing": "^5.11.1",
