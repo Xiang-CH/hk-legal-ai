@@ -24,7 +24,7 @@ Every API request checks the key. The page itself contains no content data until
 
 Existing page IDs are retained on updates. Outgoing page/legislation links are rebuilt from workbook content. Existing case relationships are preserved on updates because this project has no supported case-link writer. Deletes remove incoming/outgoing page links, other page relationships and English search chunks. Unresolved CLIC, legislation or case references are reported rather than invented.
 
-`content_import_jobs` retains source rows, before/after content and completed results for inspection; it also holds in-progress vectors. This is a shared-key activity history, not per-person identity tracking. Access to it is restricted by the same key. Normal database backups remain necessary; the dashboard does not offer one-click rollback. Operators can remove old completed job records under their retention policy once they no longer need the history. Preserve incomplete records if imports may be resumed.
+`content_import_jobs` retains the file name, selected page metadata, before/after content and completed results for inspection; in-progress chunks and vectors are stored separately in `content_import_chunks`. This is a shared-key activity history, not per-person identity tracking. Access to it is restricted by the same key. Normal database backups remain necessary; the dashboard does not offer one-click rollback. Operators can remove old completed job records under their retention policy once they no longer need the history. Preserve incomplete records if imports may be resumed. Staged rows are removed after successful publication and cascade when the owning job is removed.
 
 ## Verification
 
@@ -37,3 +37,5 @@ The suite covers read-only preview, resumed indexing, atomic add/update/delete, 
 ## Initial preview setup
 
 The import-history migration was applied to the configured CLIC database during implementation. The `feat/clic-content-dashboard` preview branch has a dedicated admin key configured as a Vercel Secret. The preview targets the existing CLIC database: choosing Apply there publishes live content changes. Production remains disabled until its own admin key is configured.
+
+The staging migration moves existing JSON checkpoints into the new table before removing vector arrays from job payloads. It waits for active import steps using a table lock. Reload older dashboard tabs after deployment to resume using the new version. New steps process at most 16 vectors, and final publication copies staged vectors inside PostgreSQL.

@@ -365,3 +365,183 @@ test(
     );
   },
 );
+
+test("HTML gateway errors provide status and resume guidance instead of JSON parser errors", async () => {
+  const { readResponse } = await import("../../src/lib/content-admin/response");
+  await assert.rejects(
+    readResponse(new Response("<html>Timeout</html>", { status: 504 })),
+    /504.*Recent batches/,
+  );
+  await assert.rejects(
+    readResponse(new Response("not json", { status: 200 })),
+    /Invalid server response/,
+  );
+  await assert.rejects(
+    readResponse(
+      Response.json({ error: "Page changed since preview" }, { status: 409 }),
+    ),
+    /Page changed since preview/,
+  );
+  assert.deepEqual(await readResponse(Response.json({ status: "complete" })), {
+    status: "complete",
+  });
+});
+test(
+  "multiple embedding steps keep job metadata bounded and publish staged vectors inside Postgres",
+  live,
+  async () => {
+    await seed();
+    const rows = Array.from({ length: 40 }, (_, i) => ({
+      ...row(1000 + i, 1000 + i),
+      html:
+        "<h2>Title</h2><p>" +
+        "Distinct searchable body text. ".repeat(400) +
+        "</p>",
+    }));
+    const p = await prepare(db, {
+      fileName: "large.xlsx",
+      adds: "1000-1039",
+      updates: "",
+      deletes: "",
+      rows,
+      links: [],
+    });
+    const first = await advance(db, p.id);
+    assert.equal(first.processed, 16);
+    assert.ok(first.total > 32);
+    const bytes = async () =>
+      Number(
+        (
+          await db.query(
+            "SELECT octet_length(payload::text)::int AS n FROM content_import_jobs WHERE id=$1",
+            [p.id],
+          )
+        ).rows[0].n,
+      );
+    const firstBytes = await bytes();
+    const next = await advance(db, p.id);
+    assert.equal(next.processed, 32);
+    assert.ok(Math.abs((await bytes()) - firstBytes) < 128);
+    assert.equal(
+      (
+        await db.query(
+          "SELECT count(*)::int AS n FROM content_import_chunks WHERE job_id=$1 AND embedding IS NOT NULL",
+          [p.id],
+        )
+      ).rows[0].n,
+      32,
+    );
+    assert.equal(
+      (
+        await db.query(
+          'SELECT count(*)::int AS n FROM "ClicPage" WHERE nid>=1000',
+        )
+      ).rows[0].n,
+      0,
+    );
+    let completed = next;
+    for (let i = 0; completed.status !== "complete" && i < 100; i++)
+      completed = await advance(db, p.id);
+    assert.equal(completed.status, "complete");
+    assert.equal(
+      (
+        await db.query(
+          "SELECT count(*)::int AS n FROM clic_chunks WHERE nid>=1000",
+        )
+      ).rows[0].n,
+      first.total,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "SELECT count(*)::int AS n FROM content_import_chunks WHERE job_id=$1",
+          [p.id],
+        )
+      ).rows[0].n,
+      0,
+    );
+  },
+);
+
+test(
+  "staging migration preserves legacy in-progress vectors and completed progress",
+  live,
+  async () => {
+    const { randomUUID } = await import("node:crypto");
+    const schema = "content_migration_" + randomUUID().replaceAll("-", "");
+    await db.query(
+      `CREATE SCHEMA ${schema}; SET search_path TO ${schema},public`,
+    );
+    try {
+      await db.query(
+        "CREATE TABLE content_import_jobs (id uuid PRIMARY KEY,payload jsonb NOT NULL)",
+      );
+      const vector = Array(3072).fill(0.01);
+      const legacy = {
+        changes: [
+          {
+            title: "Retain this metadata",
+            chunks: [
+              { nid: 10, number: 0, content: "Ready chunk", embedding: vector },
+              { nid: 10, number: 1, content: "Pending chunk", embedding: null },
+            ],
+          },
+        ],
+      };
+      const ongoing = randomUUID(),
+        complete = randomUUID();
+      for (const [id, status] of [
+        [ongoing, "indexing"],
+        [complete, "complete"],
+      ])
+        await db.query(
+          "INSERT INTO content_import_jobs VALUES ($1,$2::jsonb)",
+          [id, JSON.stringify({ ...legacy, status })],
+        );
+      await db.query(
+        await fs.readFile(
+          "prisma/migrations/20261110010000_content_import_chunks/migration.sql",
+          "utf8",
+        ),
+      );
+      const payload = (
+        await db.query("SELECT payload FROM content_import_jobs WHERE id=$1", [
+          ongoing,
+        ])
+      ).rows[0].payload;
+      assert.equal(payload.total, 2);
+      assert.equal(payload.processed, 1);
+      assert.equal(payload.changes[0].title, "Retain this metadata");
+      assert.equal("chunks" in payload.changes[0], false);
+      assert.deepEqual(
+        (
+          await db.query(
+            "SELECT count(*)::int n,count(embedding)::int ready FROM content_import_chunks WHERE job_id=$1",
+            [ongoing],
+          )
+        ).rows[0],
+        { n: 2, ready: 1 },
+      );
+      const done = (
+        await db.query("SELECT payload FROM content_import_jobs WHERE id=$1", [
+          complete,
+        ])
+      ).rows[0].payload;
+      assert.equal(done.total, 2);
+      assert.equal(done.processed, 2);
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int n FROM content_import_chunks WHERE job_id=$1",
+            [complete],
+          )
+        ).rows[0].n,
+        0,
+      );
+    } finally {
+      await db.query("ROLLBACK");
+      await db.query("SET search_path TO public");
+      await db.query(`DROP SCHEMA ${schema} CASCADE`);
+    }
+  },
+);

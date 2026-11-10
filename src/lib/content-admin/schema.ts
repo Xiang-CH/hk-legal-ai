@@ -81,12 +81,6 @@ export const pageSchema = z.object({
   path: z.string(),
   contextualInformation: z.string(),
 });
-export const chunkSchema = z.object({
-  nid: z.number(),
-  number: z.number(),
-  content: z.string(),
-  embedding: z.array(z.number().finite()).length(3072).nullable(),
-});
 export const changeSchema = z.object({
   secondId: z.number(),
   action: actionSchema,
@@ -96,7 +90,6 @@ export const changeSchema = z.object({
   changed: z.boolean(),
   warnings: z.array(z.string()),
   refs: z.array(z.string()),
-  chunks: z.array(chunkSchema),
 });
 export const jobSchema = z.object({
   fileName: z.string(),
@@ -105,6 +98,8 @@ export const jobSchema = z.object({
   warnings: z.array(z.string()),
   links: z.array(z.object({ nid: z.number(), url: z.string() })),
   createdAt: z.string(),
+  processed: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
 });
 export type Job = z.infer<typeof jobSchema>;
 export type Change = z.infer<typeof changeSchema>;
@@ -114,7 +109,7 @@ export const viewJobSchema = jobSchema
     id: z.uuid(),
     processed: z.number(),
     total: z.number(),
-    changes: z.array(changeSchema.omit({ refs: true, chunks: true })),
+    changes: z.array(changeSchema.omit({ refs: true })),
   });
 export type ViewJob = z.infer<typeof viewJobSchema>;
 export const historySchema = z.object({

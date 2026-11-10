@@ -254,6 +254,20 @@ model ContentImportJob {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  @@index([createdAt], map: "content_import_jobs_created_at_idx")
+  chunks ContentImportChunk[]
+
+  @@index([createdAt(sort: Desc)], map: "content_import_jobs_created_at_idx")
   @@map("content_import_jobs")
+}
+
+model ContentImportChunk {
+  jobId     String                        @map("job_id") @db.Uuid
+  nid       Int
+  chunkNo   Int                           @map("chunk_no")
+  content   String                        @db.Text
+  embedding Unsupported("halfvec(3072)")?
+  job       ContentImportJob              @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([jobId, nid, chunkNo])
+  @@map("content_import_chunks")
 }

@@ -222,6 +222,19 @@ Table content_import_jobs {
   payload Json [not null]
   createdAt DateTime [default: `now()`, not null]
   updatedAt DateTime [default: `now()`, not null]
+  chunks content_import_chunks [not null]
+}
+
+Table content_import_chunks {
+  jobId String [not null]
+  nid Int [not null]
+  chunkNo Int [not null]
+  content String [not null]
+  job content_import_jobs [not null]
+
+  indexes {
+    (jobId, nid, chunkNo) [pk]
+  }
 }
 
 Table ClicPageRelationToClicPage {
@@ -292,3 +305,5 @@ Ref: clic_chunks.(nid, languageCode) > ClicPage.(nid, languageCode) [delete: Cas
 Ref: chat_usage_events.previousId - chat_usage_events.id [delete: Set Null]
 
 Ref: judgment_chunks.judgmentId > Judgment.id [delete: Cascade]
+
+Ref: content_import_chunks.jobId > content_import_jobs.id [delete: Cascade]

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { z } from "zod";
+import { readResponse } from "@/lib/content-admin/response";
 import { APP_BASE_PATH } from "@/lib/routes";
 import {
   historySchema,
@@ -43,13 +44,9 @@ export default function ContentDashboard() {
       headers: { ...init?.headers, Authorization: "Bearer " + key },
       cache: "no-store",
     });
-    const data: unknown = await response.json();
-    if (!response.ok) {
-      const parsed = z.object({ error: z.string() }).safeParse(data);
-      throw new Error(parsed.success ? parsed.data.error : "Request failed.");
-    }
-    return data;
+    return readResponse(response);
   }
+
   async function attempt(run: () => Promise<void>) {
     setError("");
     setBusy(true);

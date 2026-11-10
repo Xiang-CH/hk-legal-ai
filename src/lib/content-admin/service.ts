@@ -153,7 +153,6 @@ export async function prepare(db: pg.Client, raw: unknown) {
       changed,
       warnings,
       refs: references(row.html),
-      chunks: [],
     });
   }
   const job: Job = {
@@ -163,6 +162,8 @@ export async function prepare(db: pg.Client, raw: unknown) {
     warnings: [],
     links: input.links,
     createdAt: new Date().toISOString(),
+    processed: 0,
+    total: 0,
   };
   if (Buffer.byteLength(JSON.stringify(publicJob(job)), "utf8") > 2_800_000)
     throw new ContentError(
@@ -177,15 +178,14 @@ export async function prepare(db: pg.Client, raw: unknown) {
   return { id, ...publicJob(job) };
 }
 export function publicJob(job: Job) {
-  const chunks = job.changes.flatMap((c) => c.chunks);
   return {
     fileName: job.fileName,
     status: job.status,
     createdAt: job.createdAt,
     warnings: job.warnings,
-    processed: chunks.filter((c) => c.embedding).length,
-    total: chunks.length,
-    changes: job.changes.map(({ chunks: _, refs: __, ...c }) => c),
+    processed: job.processed,
+    total: job.total,
+    changes: job.changes.map(({ refs: _, ...c }) => c),
   };
 }
 export async function load(db: pg.Client, id: string, lock = false) {
@@ -205,7 +205,7 @@ async function save(db: pg.Client, id: string, job: Job) {
     [id, JSON.stringify(job)],
   );
 }
-async function apply(db: pg.Client, job: Job) {
+async function apply(db: pg.Client, job: Job, id: string) {
   // Serialize commits. Recheck every reviewed snapshot while holding page locks.
   await db.query("SELECT pg_advisory_xact_lock(724193)");
   const ids = job.changes
@@ -326,16 +326,6 @@ async function apply(db: pg.Client, job: Job) {
   const pp: { a: number; b: number }[] = [],
     ss: { a: number; b: number }[] = [],
     cc: { a: number; b: number }[] = [];
-  const chunks: {
-    nid: number;
-    number: number;
-    title: string;
-    content: string;
-    url: string;
-    topic: string;
-    context: string;
-    embedding: string;
-  }[] = [];
   for (const c of changed) {
     if (c.action === "delete" || !c.after) continue;
     const a = c.after,
@@ -387,19 +377,6 @@ async function apply(db: pg.Client, job: Job) {
           );
       }
     }
-    for (const chunk of c.chunks) {
-      if (!chunk.embedding) throw new Error("Missing vector");
-      chunks.push({
-        nid: a.nid,
-        number: chunk.number,
-        title: a.title,
-        content: chunk.content,
-        url: a.url,
-        topic: a.topic,
-        context: a.contextualInformation,
-        embedding: "[" + chunk.embedding.join(",") + "]",
-      });
-    }
   }
   for (const [table, edges] of [
     ["_ClicPageRelationToClicPage", pp],
@@ -411,11 +388,21 @@ async function apply(db: pg.Client, job: Job) {
       [JSON.stringify(edges)],
     );
   }
-  await db.query(
-    `INSERT INTO clic_chunks (nid,chunk_no,language_code,title,content,url,topic,context,embedding,tsv)
-    SELECT nid,number,'en',title,content,url,topic,context,embedding::halfvec,to_tsvector('english',title||' '||content) FROM jsonb_to_recordset($1::jsonb) AS x(nid int,number int,title text,content text,url text,topic text,context text,embedding text)`,
-    [JSON.stringify(chunks)],
+  const staged = await db.query<{ total: number; ready: number }>(
+    "SELECT count(*)::int AS total,count(embedding)::int AS ready FROM content_import_chunks WHERE job_id=$1",
+    [id],
   );
+  const counts = staged.rows[0];
+  if (!counts || counts.total !== job.total || counts.ready !== job.total)
+    throw new Error("Incomplete staged search data");
+  const published = await db.query(
+    `INSERT INTO clic_chunks (nid,chunk_no,language_code,title,content,url,topic,context,embedding,tsv)
+    SELECT s.nid,s.chunk_no,'en',p.title,s.content,p.url,p.topic,p."contextualInformation",s.embedding,to_tsvector('english',p.title||' '||s.content)
+    FROM content_import_chunks s JOIN "ClicPage" p ON p.nid=s.nid AND p."languageCode"='en' WHERE s.job_id=$1`,
+    [id],
+  );
+  if (published.rowCount !== job.total)
+    throw new Error("Published chunk count mismatch");
 }
 export async function advance(db: pg.Client, id: string) {
   await db.query("BEGIN");
@@ -431,24 +418,40 @@ export async function advance(db: pg.Client, id: string) {
         chunkOverlap: 128,
         encodingName: "o200k_base",
       });
+      const chunks: { nid: number; number: number; content: string }[] = [];
       for (const c of job.changes.filter((c) => c.changed && c.after)) {
-        if (!c.after) continue;
-        const texts = await splitter.splitText(c.after.content);
-        c.chunks = texts.map((content, number) => ({
-          nid: c.after?.nid ?? 0,
-          number,
-          content,
-          embedding: null,
-        }));
-        if (!c.chunks.length)
+        const page = c.after;
+        if (!page) continue;
+        const texts = await splitter.splitText(page.content);
+        if (!texts.length)
           throw new ContentError(`Page ${c.secondId} has an empty body.`);
+        chunks.push(
+          ...texts.map((content, number) => ({
+            nid: page.nid,
+            number,
+            content,
+          })),
+        );
       }
+      await db.query(
+        `INSERT INTO content_import_chunks (job_id,nid,chunk_no,content) SELECT $1::uuid,nid,number,content FROM jsonb_to_recordset($2::jsonb) AS x(nid int,number int,content text)`,
+        [id, JSON.stringify(chunks)],
+      );
+      job.total = chunks.length;
       job.status = "indexing";
     }
-    const batch = job.changes
-      .flatMap((c) => c.chunks)
-      .filter((c) => !c.embedding)
-      .slice(0, 16);
+    const batch = z
+      .array(
+        z.object({ nid: z.number(), number: z.number(), content: z.string() }),
+      )
+      .parse(
+        (
+          await db.query(
+            "SELECT nid,chunk_no AS number,content FROM content_import_chunks WHERE job_id=$1 AND embedding IS NULL ORDER BY nid,chunk_no LIMIT 16",
+            [id],
+          )
+        ).rows,
+      );
     if (batch.length) {
       const endpoint = process.env.AZURE_OPENAI_ENDPOINT?.replace(/\/+$/, "");
       if (!endpoint || !process.env.AZURE_OPENAI_KEY)
@@ -471,17 +474,33 @@ export async function advance(db: pg.Client, id: string) {
       });
       if (result.data.length !== batch.length)
         throw new Error("Incomplete embeddings");
-      for (const item of result.data) {
+      const seen = new Set<number>();
+      const vectors = result.data.map((item) => {
         const chunk = batch[item.index];
-        if (!chunk) throw new Error("Invalid embedding index");
-        chunk.embedding = z
+        if (!chunk || seen.has(item.index))
+          throw new Error("Invalid embedding index");
+        seen.add(item.index);
+        const embedding = z
           .array(z.number().finite())
           .length(3072)
           .parse(item.embedding);
-      }
+        return {
+          nid: chunk.nid,
+          number: chunk.number,
+          embedding: "[" + embedding.join(",") + "]",
+        };
+      });
+      const written = await db.query(
+        `UPDATE content_import_chunks s SET embedding=x.embedding::halfvec FROM jsonb_to_recordset($2::jsonb) AS x(nid int,number int,embedding text) WHERE s.job_id=$1 AND s.nid=x.nid AND s.chunk_no=x.number AND s.embedding IS NULL`,
+        [id, JSON.stringify(vectors)],
+      );
+      if (written.rowCount !== vectors.length)
+        throw new Error("Staging write mismatch");
+      job.processed += vectors.length;
     } else {
-      await apply(db, job);
+      await apply(db, job, id);
       job.status = "complete";
+      await db.query("DELETE FROM content_import_chunks WHERE job_id=$1", [id]);
     }
     await save(db, id, job);
     await db.query("COMMIT");
