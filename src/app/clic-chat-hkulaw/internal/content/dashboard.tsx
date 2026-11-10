@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import ContentDiff from "./content-diff";
 import { z } from "zod";
 import { readResponse } from "@/lib/content-admin/response";
 import { APP_BASE_PATH } from "@/lib/routes";
@@ -446,43 +447,7 @@ export default function ContentDashboard() {
                                 {w}
                               </p>
                             ))}
-                            {c.changed && (
-                              <details className="mt-3">
-                                <summary className="cursor-pointer underline underline-offset-4">
-                                  Compare content
-                                </summary>
-                                <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                                  <div>
-                                    <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-500">
-                                      Before
-                                    </h3>
-                                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-red-50 p-3 font-sans text-xs leading-5">
-                                      {c.before
-                                        ? c.before.title +
-                                          "\n" +
-                                          c.before.url +
-                                          "\n\n" +
-                                          c.before.content
-                                        : "New page"}
-                                    </pre>
-                                  </div>
-                                  <div>
-                                    <h3 className="mb-2 text-xs font-semibold uppercase text-neutral-500">
-                                      After
-                                    </h3>
-                                    <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-emerald-50 p-3 font-sans text-xs leading-5">
-                                      {c.after
-                                        ? c.after.title +
-                                          "\n" +
-                                          c.after.url +
-                                          "\n\n" +
-                                          c.after.content
-                                        : "Page and search entries will be removed"}
-                                    </pre>
-                                  </div>
-                                </div>
-                              </details>
-                            )}
+                            {c.changed && <ContentDiff change={c} />}
                           </td>
                         </tr>
                       ))}
