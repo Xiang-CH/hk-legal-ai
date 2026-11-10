@@ -57,11 +57,10 @@ def normalize_newlines(text):
     return re.sub(r"(\s*\n\s*){2,}", "\n\n", text)
 
 def parse_content(content_html):
-    """prepdoc.ipynb parity: drop the <h2> header line, convert to markdown,
-    normalize newlines. Stored into ClicPage.content, so the compare against
-    existing rows is markdown-vs-markdown and only real edits flag updates."""
-    parts = (content_html or "").split("</h2>", maxsplit=1)
-    no_header = parts[1].strip() if len(parts) > 1 else (content_html or "")
+    """Remove the first h2 without discarding adjacent content, then convert
+    to normalized Markdown for storage and comparison with existing pages."""
+    no_header = re.sub(r"<h2\b[^>]*>.*?</h2\s*>", "", content_html or "",
+                       count=1, flags=re.IGNORECASE | re.DOTALL).strip()
     return normalize_newlines(markdownify(no_header).strip())
 
 def norm(s):
