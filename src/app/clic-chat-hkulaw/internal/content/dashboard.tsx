@@ -149,7 +149,11 @@ export default function ContentDashboard() {
           : c.action === filter && c.changed),
     ) ?? [];
   return (
-    <main className="min-h-screen bg-neutral-50 text-neutral-900">
+    <main
+      aria-label="CLIC content dashboard"
+      tabIndex={0}
+      className="h-[calc(100dvh-37px)] overflow-y-auto overscroll-contain bg-neutral-50 text-neutral-900"
+    >
       <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
@@ -280,7 +284,7 @@ export default function ContentDashboard() {
                       id={f.id}
                       rows={3}
                       className={field}
-                      placeholder="e.g. 2759–2973"
+                      placeholder="e.g. 1-2, 11, 14, 204-223"
                       value={f.value}
                       disabled={busy}
                       onChange={(e) => {
