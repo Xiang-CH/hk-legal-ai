@@ -84,11 +84,11 @@ export async function login(db: pg.Client, request: Request) {
   checkOrigin(request);
   const limit =
     await db.query(`INSERT INTO content_admin_login_limits (scope,attempts,reset_at)
-    VALUES ('shared-dashboard',1,now()+interval '15 minutes')
+    VALUES ('shared-dashboard',1,now()+interval '1 hour')
     ON CONFLICT (scope) DO UPDATE SET
       attempts=CASE WHEN content_admin_login_limits.reset_at <= now() THEN 1 ELSE content_admin_login_limits.attempts+1 END,
-      reset_at=CASE WHEN content_admin_login_limits.reset_at <= now() THEN now()+interval '15 minutes' ELSE content_admin_login_limits.reset_at END
-    WHERE content_admin_login_limits.reset_at <= now() OR content_admin_login_limits.attempts < 10
+      reset_at=CASE WHEN content_admin_login_limits.reset_at <= now() THEN now()+interval '1 hour' ELSE content_admin_login_limits.reset_at END
+    WHERE content_admin_login_limits.reset_at <= now() OR content_admin_login_limits.attempts < 5
     RETURNING attempts`);
   if (!limit.rowCount) {
     const reset = await db.query(
@@ -96,9 +96,9 @@ export async function login(db: pg.Client, request: Request) {
     );
     const seconds: unknown = reset.rows[0]?.seconds;
     throw new ContentError(
-      "Too many login attempts. Please try again in 15 minutes.",
+      "Too many login attempts. Please try again in an hour.",
       429,
-      typeof seconds === "number" ? seconds : 900,
+      typeof seconds === "number" ? seconds : 3600,
     );
   }
   const actual =

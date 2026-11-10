@@ -655,15 +655,15 @@ test(
           } catch (error) {
             if (error instanceof ContentError) {
               if (error.status === 429)
-                assert(Number(failure(error).headers.get("Retry-After")) > 0);
+                assert(Number(failure(error).headers.get("Retry-After")) > 3500);
               return error.status;
             }
             throw error;
           }
         }),
       );
-      assert.equal(results.filter((s) => s === 401).length, 10);
-      assert.equal(results.filter((s) => s === 429).length, 10);
+      assert.equal(results.filter((s) => s === 401).length, 5);
+      assert.equal(results.filter((s) => s === 429).length, 15);
       await authorize(
         new Request("http://localhost/api", {
           headers: { Cookie: SESSION_COOKIE + "=" + existingToken },
