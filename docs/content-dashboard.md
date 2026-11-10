@@ -6,11 +6,17 @@ Staff unlock the page with the shared admin key, upload an Excel content list, a
 
 ## Enable in an environment
 
-1. Apply the `20261110000000_content_import_jobs` migration through the normal Prisma migration deployment. Existing page, link and chunk tables must already exist.
-2. Set `CLIC_CONTENT_ADMIN_TOKEN` to a random value of at least 24 characters in that environment. Share it with authorized staff through your normal secret-sharing channel. The page keeps it in memory, not localStorage or the URL. Rotate the server variable to replace the shared key.
+1. Apply all pending migrations, including `20261111000000_content_admin_sessions`, through the normal Prisma migration deployment. Existing page, link and chunk tables must already exist.
+2. Set `CLIC_CONTENT_ADMIN_TOKEN` to a random value of at least 24 characters in that environment. Share it with authorized staff through your normal secret-sharing channel. The key is sent only at login, then cleared from page memory. It is never saved in localStorage or the URL. Rotate the server variable to replace the shared key and invalidate existing sessions.
 3. Configure `DATABASE_URL`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`, and `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` as for the existing application. This index expects 3072-dimensional embeddings.
 
-Every API request checks the key. The page itself contains no content data until it is unlocked. There is no public link from the chat navigation. Sharing the dashboard URL alone does not grant access. The target database is the environment's `DATABASE_URL`; use a separate preview database when staff must not affect production.
+Every API request checks a server-side session and the current key version. The page itself contains no content data until it is unlocked. There is no public link from the chat navigation. Sharing the dashboard URL alone does not grant access. The target database is the environment's `DATABASE_URL`; use a separate preview database when staff must not affect production.
+
+## Sessions and login protection
+
+Successful login sets a random, opaque cookie for 7 days. It is HttpOnly, SameSite=Strict and Secure in production, scoped to the content API, and host-only. PostgreSQL stores only its SHA-256 hash, key version and expiry. Reloads and new tabs on the same hostname reuse the session. Different preview hostnames require separate login. **Lock dashboard** revokes the server session and expires the cookie; rotating the shared key also invalidates sessions. Mutating endpoints require a same-origin Origin header.
+
+PostgreSQL atomically reserves at most 10 login attempts per 15-minute window across all instances and clients. Successful attempts also count; an attacker cannot reset the counter or bypass it by spoofing IP headers or submitting the key to content endpoints. Further attempts return HTTP 429 with Retry-After. The cooldown affects new logins for everyone sharing this database, so a deliberate attack can temporarily prevent sign-in. Existing authenticated sessions continue to work. The fixed window expires automatically. There is no in-memory limiter and no additional KV service. Database errors fail closed.
 
 ## Staff workflow
 

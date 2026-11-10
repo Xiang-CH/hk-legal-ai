@@ -14,18 +14,7 @@ import {
 } from "./schema";
 import { ContentError } from "./auth";
 
-export async function withDatabase<T>(run: (db: pg.Client) => Promise<T>) {
-  const db = new pg.Client({
-    connectionString: process.env.DATABASE_URL,
-    connectionTimeoutMillis: 15000,
-  });
-  await db.connect();
-  try {
-    return await run(db);
-  } finally {
-    await db.end();
-  }
-}
+export { withDatabase } from "./database";
 const pagesSchema = z.array(pageSchema);
 const columns = 'id,nid,title,content,topic,url,path,"contextualInformation"';
 export function markdown(html: string) {

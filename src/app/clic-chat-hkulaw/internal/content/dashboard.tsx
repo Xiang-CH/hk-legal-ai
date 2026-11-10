@@ -22,6 +22,7 @@ const button =
 export default function ContentDashboard() {
   const [key, setKey] = useState(""),
     [unlocked, setUnlocked] = useState(false),
+    [checkingSession, setCheckingSession] = useState(true),
     [history, setHistory] = useState<History>([]);
   const [workbook, setWorkbook] = useState<Workbook | null>(null),
     [fileName, setFileName] = useState("");
@@ -33,6 +34,41 @@ export default function ContentDashboard() {
     [error, setError] = useState(""),
     [filter, setFilter] = useState("all");
   const active = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    async function restoreSession() {
+      try {
+        const response = await fetch(api + "/session", {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        if (response.status === 401) return;
+        await readResponse(response);
+        const historyResponse = await fetch(api, {
+          cache: "no-store",
+          credentials: "same-origin",
+        });
+        const data = historySchema.parse(await readResponse(historyResponse));
+        if (!cancelled) {
+          setHistory(data.jobs);
+          setUnlocked(true);
+        }
+      } catch (error) {
+        if (!cancelled)
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Could not restore your session.",
+          );
+      } finally {
+        if (!cancelled) setCheckingSession(false);
+      }
+    }
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   useEffect(
     () => () => {
       active.current = false;
@@ -42,9 +78,14 @@ export default function ContentDashboard() {
   async function request(path: string, init?: RequestInit) {
     const response = await fetch(path, {
       ...init,
-      headers: { ...init?.headers, Authorization: "Bearer " + key },
+      credentials: "same-origin",
       cache: "no-store",
     });
+    if (response.status === 401) {
+      setUnlocked(false);
+      setJob(null);
+      setHistory([]);
+    }
     return readResponse(response);
   }
 
@@ -64,6 +105,11 @@ export default function ContentDashboard() {
   }
   async function unlock() {
     await attempt(async () => {
+      await request(api + "/session", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + key },
+      });
+      setKey("");
       await refresh();
       setUnlocked(true);
     });
@@ -172,18 +218,21 @@ export default function ContentDashboard() {
           {unlocked && (
             <button
               className="text-sm underline"
-              onClick={() => {
-                active.current = false;
-                setKey("");
-                setUnlocked(false);
-                setJob(null);
-                setHistory([]);
-                setWorkbook(null);
-                setFileName("");
-                setAdds("");
-                setUpdates("");
-                setDeletes("");
-              }}
+              onClick={() =>
+                void attempt(async () => {
+                  await request(api + "/session", { method: "DELETE" });
+                  active.current = false;
+                  setKey("");
+                  setUnlocked(false);
+                  setJob(null);
+                  setHistory([]);
+                  setWorkbook(null);
+                  setFileName("");
+                  setAdds("");
+                  setUpdates("");
+                  setDeletes("");
+                })
+              }
               disabled={busy}
             >
               Lock dashboard
@@ -198,7 +247,11 @@ export default function ContentDashboard() {
             {error}
           </div>
         )}
-        {!unlocked ? (
+        {checkingSession ? (
+          <p role="status" className="text-sm text-neutral-600">
+            Checking your session…
+          </p>
+        ) : !unlocked ? (
           <form
             className="max-w-md rounded-lg border border-neutral-200 bg-white p-6"
             onSubmit={(e) => {
@@ -220,7 +273,8 @@ export default function ContentDashboard() {
               required
             />
             <p className="mt-2 text-xs text-neutral-500">
-              The key is kept in memory, not saved in browser storage.
+              Stay signed in on this browser for 7 days. Lock the dashboard to
+              sign out.
             </p>
             <button className={button + " mt-5"} disabled={busy}>
               {busy ? "Checking access…" : "Open dashboard"}

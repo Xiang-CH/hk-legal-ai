@@ -237,6 +237,18 @@ Table content_import_chunks {
   }
 }
 
+Table content_admin_sessions {
+  tokenHash String [pk]
+  keyHash String [not null]
+  expiresAt DateTime [not null]
+}
+
+Table content_admin_login_limits {
+  scope String [pk]
+  attempts Int [not null]
+  resetAt DateTime [not null]
+}
+
 Table ClicPageRelationToClicPage {
   referencingpagesId Int [ref: > ClicPage.id]
   referencedbypagesId Int [ref: > ClicPage.id]

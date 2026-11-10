@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 export async function GET(request: Request) {
   try {
-    authorize(request);
+    await authorize(request);
     return await withDatabase(async (db) => {
       const rows = await db.query(
         "SELECT id,payload->>'fileName' AS name,payload->>'status' AS status,created_at AS \"createdAt\" FROM content_import_jobs ORDER BY created_at DESC LIMIT 20",
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
 }
 export async function POST(request: Request) {
   try {
-    authorize(request);
+    await authorize(request);
     const reader = request.body?.getReader();
     if (!reader) throw new ContentError("Missing workbook data.");
     const parts: Uint8Array[] = [];

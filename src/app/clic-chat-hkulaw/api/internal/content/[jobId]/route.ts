@@ -11,7 +11,7 @@ export const maxDuration = 120;
 type Context = { params: Promise<{ jobId: string }> };
 export async function GET(request: Request, context: Context) {
   try {
-    authorize(request);
+    await authorize(request);
     const { jobId } = await context.params;
     return await withDatabase(async (db) =>
       Response.json(
@@ -25,7 +25,7 @@ export async function GET(request: Request, context: Context) {
 }
 export async function POST(request: Request, context: Context) {
   try {
-    authorize(request);
+    await authorize(request);
     const { jobId } = await context.params;
     return await withDatabase(async (db) =>
       Response.json(await advance(db, jobId), {

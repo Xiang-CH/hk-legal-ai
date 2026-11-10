@@ -12,7 +12,15 @@ import {
   advance,
   load,
 } from "../../src/lib/content-admin/service";
-import { authorize } from "../../src/lib/content-admin/auth";
+import {
+  authorize,
+  checkOrigin,
+  login,
+  logout,
+  SESSION_COOKIE,
+  ContentError,
+  failure,
+} from "../../src/lib/content-admin/auth";
 
 const connection = process.env.CONTENT_ADMIN_TEST_DATABASE_URL;
 if (
@@ -73,43 +81,40 @@ test("removing a heading preserves text and discards executable HTML", () => {
     "Body",
   );
 });
-test("admin authorization denies missing config, wrong key and foreign origin", () => {
+test("admin authorization rejects raw keys and mutation requests without same origin", async () => {
   delete process.env.CLIC_CONTENT_ADMIN_TOKEN;
-  assert.throws(() => authorize(new Request("http://localhost/api")));
+  await assert.rejects(
+    authorize(new Request("http://localhost/api")),
+    /not configured/,
+  );
   process.env.CLIC_CONTENT_ADMIN_TOKEN =
     "content-test-key-at-least-24-characters";
-  assert.throws(() =>
-    authorize(
-      new Request("http://localhost/api", {
-        headers: { Authorization: "Bearer nope" },
-      }),
-    ),
-  );
-  assert.throws(() =>
+  await assert.rejects(
     authorize(
       new Request("http://localhost/api", {
         headers: {
           Authorization: "Bearer " + process.env.CLIC_CONTENT_ADMIN_TOKEN,
-          Origin: "https://other.example",
         },
       }),
     ),
+    /sign in/,
   );
-  authorize(
+  for (const origin of [undefined, "https://other.example", "invalid"]) {
+    assert.throws(
+      () =>
+        checkOrigin(
+          new Request("http://localhost/api", {
+            method: "POST",
+            headers: origin ? { Origin: origin } : {},
+          }),
+        ),
+      /Cross-origin/,
+    );
+  }
+  checkOrigin(
     new Request("http://localhost:3105/api", {
-      headers: {
-        Authorization: "Bearer " + process.env.CLIC_CONTENT_ADMIN_TOKEN,
-        Host: "127.0.0.1:3105",
-        Origin: "http://127.0.0.1:3105",
-      },
-    }),
-  );
-  authorize(
-    new Request("http://localhost/api", {
-      headers: {
-        Authorization: "Bearer " + process.env.CLIC_CONTENT_ADMIN_TOKEN,
-        Origin: "http://localhost",
-      },
+      method: "POST",
+      headers: { Host: "127.0.0.1:3105", Origin: "http://127.0.0.1:3105" },
     }),
   );
 });
@@ -542,6 +547,150 @@ test(
       await db.query("ROLLBACK");
       await db.query("SET search_path TO public");
       await db.query(`DROP SCHEMA ${schema} CASCADE`);
+    }
+  },
+);
+
+test(
+  "sessions survive reload, expire, revoke on logout and key rotation",
+  live,
+  async () => {
+    await db.query(
+      "TRUNCATE content_admin_sessions,content_admin_login_limits",
+    );
+    const key = "content-test-key-at-least-24-characters";
+    process.env.CLIC_CONTENT_ADMIN_TOKEN = key;
+    const loginRequest = new Request("http://localhost/api", {
+      method: "POST",
+      headers: { Origin: "http://localhost", Authorization: "Bearer " + key },
+    });
+    const token = await login(db, loginRequest);
+    const request = () =>
+      new Request("http://localhost/api", {
+        headers: { Cookie: SESSION_COOKIE + "=" + token },
+      });
+    await authorize(request());
+    await authorize(request());
+    const stored = (
+      await db.query(
+        "SELECT token_hash,expires_at > now()+interval '6 days' AS lasting FROM content_admin_sessions",
+      )
+    ).rows[0];
+    assert.notEqual(stored.token_hash, token);
+    assert.equal(stored.lasting, true);
+    await assert.rejects(
+      authorize(
+        new Request("http://localhost/api", {
+          headers: { Cookie: SESSION_COOKIE + "=" + "a".repeat(64) },
+        }),
+      ),
+      /expired/,
+    );
+    process.env.CLIC_CONTENT_ADMIN_TOKEN = key + "-rotated";
+    await assert.rejects(authorize(request()), /expired/);
+    process.env.CLIC_CONTENT_ADMIN_TOKEN = key;
+    await db.query(
+      "UPDATE content_admin_sessions SET expires_at=now()-interval '1 second'",
+    );
+    await assert.rejects(authorize(request()), /expired/);
+    const second = await login(db, loginRequest);
+    const cookie = SESSION_COOKIE + "=" + second;
+    await logout(
+      db,
+      new Request("http://localhost/api", {
+        method: "DELETE",
+        headers: { Origin: "http://localhost", Cookie: cookie },
+      }),
+    );
+    await assert.rejects(
+      authorize(
+        new Request("http://localhost/api", { headers: { Cookie: cookie } }),
+      ),
+      /expired/,
+    );
+  },
+);
+test(
+  "PostgreSQL throttles concurrent login guesses across clients and resets after cooldown",
+  live,
+  async () => {
+    await db.query(
+      "TRUNCATE content_admin_sessions,content_admin_login_limits",
+    );
+    process.env.CLIC_CONTENT_ADMIN_TOKEN =
+      "content-test-key-at-least-24-characters";
+    const existingToken = await login(
+      db,
+      new Request("http://localhost/api", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost",
+          Authorization: "Bearer " + process.env.CLIC_CONTENT_ADMIN_TOKEN,
+        },
+      }),
+    );
+    await db.query("TRUNCATE content_admin_login_limits");
+    const clients = await Promise.all(
+      Array.from({ length: 20 }, async () => {
+        const client = new pg.Client({ connectionString: connection });
+        await client.connect();
+        return client;
+      }),
+    );
+    try {
+      const results = await Promise.all(
+        clients.map(async (client) => {
+          try {
+            await login(
+              client,
+              new Request("http://localhost/api", {
+                method: "POST",
+                headers: {
+                  Origin: "http://localhost",
+                  Authorization: "Bearer wrong",
+                },
+              }),
+            );
+            return 200;
+          } catch (error) {
+            if (error instanceof ContentError) {
+              if (error.status === 429)
+                assert(Number(failure(error).headers.get("Retry-After")) > 0);
+              return error.status;
+            }
+            throw error;
+          }
+        }),
+      );
+      assert.equal(results.filter((s) => s === 401).length, 10);
+      assert.equal(results.filter((s) => s === 429).length, 10);
+      await authorize(
+        new Request("http://localhost/api", {
+          headers: { Cookie: SESSION_COOKIE + "=" + existingToken },
+        }),
+      );
+      const correct = new Request("http://localhost/api", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost",
+          Authorization: "Bearer " + process.env.CLIC_CONTENT_ADMIN_TOKEN,
+        },
+      });
+      await assert.rejects(
+        login(db, correct),
+        (error) => error instanceof ContentError && error.status === 429,
+      );
+      await db.query(
+        "UPDATE content_admin_login_limits SET reset_at=now()-interval '1 second'",
+      );
+      assert.match(await login(db, correct), /^[a-f0-9]{64}$/);
+      assert.equal(
+        (await db.query("SELECT attempts FROM content_admin_login_limits"))
+          .rows[0].attempts,
+        1,
+      );
+    } finally {
+      await Promise.all(clients.map((c) => c.end()));
     }
   },
 );

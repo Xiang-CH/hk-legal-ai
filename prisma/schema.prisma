@@ -271,3 +271,20 @@ model ContentImportChunk {
   @@id([jobId, nid, chunkNo])
   @@map("content_import_chunks")
 }
+
+model ContentAdminSession {
+  tokenHash String   @id @map("token_hash") @db.Char(64)
+  keyHash   String   @map("key_hash") @db.Char(64)
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(6)
+
+  @@index([expiresAt], map: "content_admin_sessions_expires_at_idx")
+  @@map("content_admin_sessions")
+}
+
+model ContentAdminLoginLimit {
+  scope   String   @id
+  attempts Int
+  resetAt DateTime @map("reset_at") @db.Timestamptz(6)
+
+  @@map("content_admin_login_limits")
+}
