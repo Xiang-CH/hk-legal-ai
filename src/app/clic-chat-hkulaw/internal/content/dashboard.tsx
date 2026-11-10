@@ -16,7 +16,7 @@ const api = APP_BASE_PATH + "/api/internal/content";
 type Workbook = Awaited<ReturnType<typeof readWorkbook>>;
 type History = z.infer<typeof historySchema>["jobs"];
 const field =
-  "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm text-neutral-900 focus:outline-2 focus:outline-offset-2 focus:outline-neutral-800 disabled:opacity-50";
+  "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-base sm:text-sm text-neutral-900 focus:outline-2 focus:outline-offset-2 focus:outline-neutral-800 disabled:opacity-50";
 const button =
   "rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-neutral-700";
 export default function ContentDashboard() {
@@ -198,7 +198,7 @@ export default function ContentDashboard() {
       tabIndex={0}
       className="h-[calc(100dvh-37px)] overflow-y-auto overscroll-contain bg-neutral-50 text-neutral-900"
     >
-      <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
+      <div className="mx-auto max-w-6xl px-3 py-6 sm:px-8 sm:py-10">
         <div className="mb-8 flex items-start justify-between gap-4">
           <div>
             <Link
@@ -253,7 +253,7 @@ export default function ContentDashboard() {
           </p>
         ) : !unlocked ? (
           <form
-            className="max-w-md rounded-lg border border-neutral-200 bg-white p-6"
+            className="max-w-md rounded-lg border border-neutral-200 bg-white p-4 sm:p-6"
             onSubmit={(e) => {
               e.preventDefault();
               void unlock();
@@ -282,7 +282,7 @@ export default function ContentDashboard() {
           </form>
         ) : (
           <>
-            <section className="rounded-lg border border-neutral-200 bg-white p-6">
+            <section className="rounded-lg border border-neutral-200 bg-white p-4 sm:p-6">
               <h2 className="text-lg font-semibold">Prepare a batch</h2>
               <p className="mt-1 text-sm text-neutral-600">
                 Numbers refer to column C, <strong>2nd_id</strong>, in the EN
@@ -360,7 +360,7 @@ export default function ContentDashboard() {
               </p>
             </section>
             {job && counts && (
-              <section className="mt-6 rounded-lg border border-neutral-200 bg-white p-6">
+              <section className="mt-6 rounded-lg border border-neutral-200 bg-white p-4 sm:p-6">
                 <div className="flex flex-wrap justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold">
@@ -444,69 +444,77 @@ export default function ContentDashboard() {
                     {changes.length} rows
                   </span>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-sm">
-                    <thead className="border-y bg-neutral-50 text-neutral-600">
-                      <tr>
-                        <th className="p-3">2nd_id</th>
-                        <th className="p-3">Action</th>
-                        <th className="p-3">Article and changes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {changes.map((c) => (
-                        <tr key={c.secondId} className="border-b align-top">
-                          <td className="p-3 tabular-nums">{c.secondId}</td>
-                          <td className="p-3 capitalize">
-                            {c.changed ? c.action : "No change"}
-                          </td>
-                          <td className="max-w-3xl p-3">
-                            <p className="font-medium">
-                              {c.after?.title ??
-                                c.before?.title ??
-                                "Page absent"}
-                            </p>
-                            <p className="mt-1 break-all text-xs text-neutral-500">
-                              {c.after?.url ?? c.before?.url}
-                            </p>
-                            {c.action === "update" &&
-                              c.changed &&
-                              c.before &&
-                              c.after && (
-                                <p className="mt-2 text-xs text-neutral-600">
-                                  Changed:{" "}
-                                  {(
-                                    [
-                                      "title",
-                                      "url",
-                                      "content",
-                                      "topic",
-                                      "contextualInformation",
-                                    ] as const
+                <div className="min-w-0">
+                  <div
+                    className="hidden grid-cols-[5rem_5rem_minmax(0,1fr)] gap-3 border-y bg-neutral-50 py-3 text-sm font-medium text-neutral-600 md:grid"
+                    aria-hidden="true"
+                  >
+                    <span>2nd_id</span>
+                    <span>Action</span>
+                    <span>Article and changes</span>
+                  </div>
+                  <div
+                    role="list"
+                    aria-label="Article changes"
+                    className="min-w-0 text-sm"
+                  >
+                    {changes.map((c) => (
+                      <div
+                        key={c.secondId}
+                        role="listitem"
+                        className="grid min-w-0 grid-cols-[auto_1fr] gap-x-3 gap-y-2 border-b py-4 md:grid-cols-[5rem_5rem_minmax(0,1fr)]"
+                      >
+                        <div className="tabular-nums">
+                          <span className="md:sr-only">Page </span>
+                          {c.secondId}
+                        </div>
+                        <div className="capitalize text-neutral-600">
+                          {c.changed ? c.action : "No change"}
+                        </div>
+                        <div className="col-span-2 min-w-0 md:col-span-1">
+                          <p className="break-words font-medium">
+                            {c.after?.title ?? c.before?.title ?? "Page absent"}
+                          </p>
+                          <p className="mt-1 break-all text-xs text-neutral-500">
+                            {c.after?.url ?? c.before?.url}
+                          </p>
+                          {c.action === "update" &&
+                            c.changed &&
+                            c.before &&
+                            c.after && (
+                              <p className="mt-2 text-xs text-neutral-600">
+                                Changed:{" "}
+                                {(
+                                  [
+                                    "title",
+                                    "url",
+                                    "content",
+                                    "topic",
+                                    "contextualInformation",
+                                  ] as const
+                                )
+                                  .filter(
+                                    (field) =>
+                                      c.before?.[field] !== c.after?.[field],
                                   )
-                                    .filter(
-                                      (field) =>
-                                        c.before?.[field] !== c.after?.[field],
-                                    )
-                                    .map((field) =>
-                                      field === "contextualInformation"
-                                        ? "context"
-                                        : field,
-                                    )
-                                    .join(", ")}
-                                </p>
-                              )}
-                            {c.warnings.map((w) => (
-                              <p key={w} className="mt-2 text-amber-800">
-                                {w}
+                                  .map((field) =>
+                                    field === "contextualInformation"
+                                      ? "context"
+                                      : field,
+                                  )
+                                  .join(", ")}
                               </p>
-                            ))}
-                            {c.changed && <ContentDiff change={c} />}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                            )}
+                          {c.warnings.map((w) => (
+                            <p key={w} className="mt-2 text-amber-800">
+                              {w}
+                            </p>
+                          ))}
+                          {c.changed && <ContentDiff change={c} />}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 {job.warnings.length > 0 && (
                   <details className="mt-5 rounded border border-amber-200 bg-amber-50 p-4 text-sm">

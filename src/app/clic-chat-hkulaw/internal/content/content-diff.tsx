@@ -32,10 +32,10 @@ export default function ContentDiff({ change }: { change: Change }) {
   const [split, setSplit] = useState(false);
   return (
     <details
-      className="mt-3"
+      className="mt-3 min-w-0"
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="cursor-pointer underline underline-offset-4">
+      <summary className="cursor-pointer py-2 underline underline-offset-4">
         Compare changes
       </summary>
       {open && (
@@ -72,7 +72,20 @@ export default function ContentDiff({ change }: { change: Change }) {
               rightTitle="After"
               hideSummary
               styles={{
+                diffContainer: {
+                  minWidth: split ? "640px" : "0",
+                  "@media (max-width: 768px)": {
+                    minWidth: split ? "640px" : "0",
+                  },
+                  pre: { width: "auto" },
+                  "& col[width='50px']": { width: "32px" },
+                  "& col[width='28px']": { width: "20px" },
+                },
+                gutter: { minWidth: 32, width: 32, padding: "0 4px" },
+                codeFoldGutter: { minWidth: 32, width: 32 },
+                marker: { minWidth: 20, width: 20, padding: 0 },
                 contentText: {
+                  lineBreak: "normal",
                   whiteSpace: "pre-wrap",
                   overflowWrap: "anywhere",
                 },
