@@ -1,0 +1,35 @@
+# Internal CLIC content dashboard
+
+Route: `/clic-chat-hkulaw/internal/content`.
+
+Staff unlock the page with the shared admin key, upload an Excel content list, and enter page numbers for Add, Update and Delete. Numbers use the EN sheet's column C (`2nd_id`), including both ends of ranges such as `2759–2973`. Other languages are outside this first version.
+
+## Enable in an environment
+
+1. Apply the `20261110000000_content_import_jobs` migration through the normal Prisma migration deployment. Existing page, link and chunk tables must already exist.
+2. Set `CLIC_CONTENT_ADMIN_TOKEN` to a random value of at least 24 characters in that environment. Share it with authorized staff through your normal secret-sharing channel. The page keeps it in memory, not localStorage or the URL. Rotate the server variable to replace the shared key.
+3. Configure `DATABASE_URL`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_KEY`, and `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` as for the existing application. This index expects 3072-dimensional embeddings.
+
+Every API request checks the key. The page itself contains no content data until it is unlocked. There is no public link from the chat navigation. Sharing the dashboard URL alone does not grant access. The target database is the environment's `DATABASE_URL`; use a separate preview database when staff must not affect production.
+
+## Staff workflow
+
+- Upload an `.xlsx` file, up to 12 MB. It is read in the browser; only selected rows and reference mappings are sent to the server. A selected batch and its before/after preview must fit the hosting response limits. The UI asks for a smaller batch when needed.
+- Enter up to 500 page IDs across the three actions. Missing/duplicate IDs, overlapping actions, invalid English URLs and empty article bodies are rejected. Add requires an absent nid; Update requires an existing page.
+- Deletion rows may omit nid. Exact URL lookup resolves them; already-absent pages show a no-op. Multiple requested delete numbers can map to the same physical page. Review shows requested entries, while the database removes that record only once.
+- A workbook deletion mark or strikethrough is shown as a warning if staff explicitly select Add or Update. The selected action takes precedence; body and URL validation still apply.
+- Review totals, the change bar, action filters and per-article before/after content. Nothing is changed by upload or preview.
+- Choose **Apply reviewed changes**. The server prepares chunks and embeddings in bounded requests, saving progress in Postgres. Keep the tab open for processing; after interruption, unlock the dashboard and select the batch under Recent batches to resume.
+- The final request rechecks reviewed pages for concurrent edits, then writes pages, references and chunks in one transaction. A failure rolls back all live changes. If content has changed since preview, create a fresh preview. The dashboard's completed state means the whole batch was committed; completed requests are idempotent.
+
+Existing page IDs are retained on updates. Outgoing page/legislation links are rebuilt from workbook content. Existing case relationships are preserved on updates because this project has no supported case-link writer. Deletes remove incoming/outgoing page links, other page relationships and English search chunks. Unresolved CLIC, legislation or case references are reported rather than invented.
+
+`content_import_jobs` retains source rows, before/after content and completed results for inspection; it also holds in-progress vectors. This is a shared-key activity history, not per-person identity tracking. Access to it is restricted by the same key. Normal database backups remain necessary; the dashboard does not offer one-click rollback. Operators can remove old completed job records under their retention policy once they no longer need the history. Preserve incomplete records if imports may be resumed.
+
+## Verification
+
+`pnpm test:content-admin` runs parsing/authentication tests. For full database tests, point `CONTENT_ADMIN_TEST_DATABASE_URL` to an isolated localhost PostgreSQL database with pgvector and the project schema/migrations applied. The suite refuses non-local hosts and truncates the fixture tables. It uses a local embedding-provider fixture, not a paid model service.
+
+Set `CLIC_TEST_WORKBOOK` to a local November 6 workbook path to additionally exercise the real file.
+
+The suite covers read-only preview, resumed indexing, atomic add/update/delete, reference and chunk writes, stale-preview rejection, rollback after a forced database error, and repeated completed requests. Browser verification uses the same isolated database and a synthetic workbook; production content is not used for test mutations.

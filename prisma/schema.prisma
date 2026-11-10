@@ -246,3 +246,14 @@ model JudgmentChunk {
   @@index([judgmentId])
   @@map("judgment_chunks")
 }
+
+// Prepared content batches are durable; page mutations happen at final commit.
+model ContentImportJob {
+  id        String   @id @db.Uuid
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@index([createdAt], map: "content_import_jobs_created_at_idx")
+  @@map("content_import_jobs")
+}

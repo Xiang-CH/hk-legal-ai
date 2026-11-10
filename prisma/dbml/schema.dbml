@@ -217,6 +217,13 @@ Table judgment_chunks {
   }
 }
 
+Table content_import_jobs {
+  id String [pk]
+  payload Json [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [default: `now()`, not null]
+}
+
 Table ClicPageRelationToClicPage {
   referencingpagesId Int [ref: > ClicPage.id]
   referencedbypagesId Int [ref: > ClicPage.id]

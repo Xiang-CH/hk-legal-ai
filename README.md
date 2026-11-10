@@ -290,3 +290,7 @@ tickets/                     # T01–T17 task breakdown
 
 Known pending work: T17 legislation chunks are indexed for `en` only; `sc`/`tc` are not
 yet loaded.
+
+## Staff content dashboard
+
+Upload a content list and review additions, updates and deletions at `/clic-chat-hkulaw/internal/content`. Setup, shared-key access, resumable indexing and database verification are documented in [the dashboard guide](docs/content-dashboard.md).
