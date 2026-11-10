@@ -176,6 +176,11 @@ export default function ContentDashboard() {
                 setUnlocked(false);
                 setJob(null);
                 setHistory([]);
+                setWorkbook(null);
+                setFileName("");
+                setAdds("");
+                setUpdates("");
+                setDeletes("");
               }}
               disabled={busy}
             >
@@ -294,8 +299,8 @@ export default function ContentDashboard() {
                 {busy ? "Working…" : "Preview changes"}
               </button>
               <p className="mt-3 text-xs text-neutral-500">
-                Up to 500 pages per batch. Deleted or struck-through rows can
-                only be selected for deletion.
+                Up to 500 pages per batch. Workbook deletion marks are shown as
+                warnings for you to review.
               </p>
             </section>
             {job && counts && (

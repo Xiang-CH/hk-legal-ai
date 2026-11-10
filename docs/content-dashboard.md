@@ -33,3 +33,7 @@ Existing page IDs are retained on updates. Outgoing page/legislation links are r
 Set `CLIC_TEST_WORKBOOK` to a local November 6 workbook path to additionally exercise the real file.
 
 The suite covers read-only preview, resumed indexing, atomic add/update/delete, reference and chunk writes, stale-preview rejection, rollback after a forced database error, and repeated completed requests. Browser verification uses the same isolated database and a synthetic workbook; production content is not used for test mutations.
+
+## Initial preview setup
+
+The import-history migration was applied to the configured CLIC database during implementation. The `feat/clic-content-dashboard` preview branch has a dedicated admin key configured as a Vercel Secret. The preview targets the existing CLIC database: choosing Apply there publishes live content changes. Production remains disabled until its own admin key is configured.
