@@ -22,6 +22,10 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(cli.parse_content('<h2>Title</h2><p>Body</p>'), 'Body')
         self.assertEqual(cli.parse_content('<p>No heading</p>'), 'No heading')
 
+    def test_removed_heading_keeps_surrounding_text_separate(self):
+        """A removed block heading must not concatenate adjacent words."""
+        self.assertEqual(cli.parse_content('Before<h2>Title</h2>After'), 'Before\n\nAfter')
+
     def test_incomplete_range_stops_before_database(self):
         with patch.object(sys, 'argv', ['import', '--add-lo', '2759', '--add-hi', '2973']), \
              patch.object(cli, 'read_selection', return_value=([{'second_id': 2759, 'nid': 3544, 'content_html': '<p>Content</p>', 'struck': False, 'url': 'https://clic.org.hk/en/topics/test', 'title': 'Page'}], {})), \

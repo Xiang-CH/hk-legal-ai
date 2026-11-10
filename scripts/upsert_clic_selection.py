@@ -59,7 +59,7 @@ def normalize_newlines(text):
 def parse_content(content_html):
     """Remove the first h2 without discarding adjacent content, then convert
     to normalized Markdown for storage and comparison with existing pages."""
-    no_header = re.sub(r"<h2\b[^>]*>.*?</h2\s*>", "", content_html or "",
+    no_header = re.sub(r"<h2\b[^>]*>.*?</h2\s*>", "<br><br>", content_html or "",
                        count=1, flags=re.IGNORECASE | re.DOTALL).strip()
     return normalize_newlines(markdownify(no_header).strip())
 
