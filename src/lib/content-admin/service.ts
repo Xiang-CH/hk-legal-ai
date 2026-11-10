@@ -17,6 +17,7 @@ import { ContentError } from "./auth";
 export { withDatabase } from "./database";
 const pagesSchema = z.array(pageSchema);
 const columns = 'id,nid,title,content,topic,url,path,"contextualInformation"';
+/** Convert workbook HTML while removing executable elements and the duplicated first heading. */
 export function markdown(html: string) {
   const converter = new Turndown({
     headingStyle: "atx",
@@ -28,19 +29,29 @@ export function markdown(html: string) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
+/** Extract workbook link destinations before Markdown conversion loses relationship metadata. */
 export function references(html: string) {
   return [...html.matchAll(/<a\b[^>]*\bhref\s*=\s*["']([^"']+)["']/gi)].map(
     (x) => x[1].replace(/&amp;/g, "&"),
   );
 }
+const clicHosts = new Set([
+  "clic.org.hk",
+  "www.clic.org.hk",
+  "wwwnew.clic.org.hk",
+]);
+/** Normalize CLIC paths for matching workbook references to existing pages. */
 const pathKey = (url: string) => {
   try {
     const u = new URL(url, "https://clic.org.hk");
+    if (!clicHosts.has(u.hostname) || !["https:", "http:"].includes(u.protocol))
+      return "";
     return u.pathname.replace(/\/$/, "").toLowerCase();
   } catch {
     return "";
   }
 };
+/** Validate selected rows and save a read-only before/after snapshot; never mutate live pages. */
 export async function prepare(db: pg.Client, raw: unknown) {
   const input = requestSchema.parse(raw);
   const wanted = selection(input);
@@ -166,6 +177,7 @@ export async function prepare(db: pg.Client, raw: unknown) {
   );
   return { id, ...publicJob(job) };
 }
+/** Omit reference metadata from client responses while retaining reviewed article snapshots. */
 export function publicJob(job: Job) {
   return {
     fileName: job.fileName,
@@ -177,6 +189,7 @@ export function publicJob(job: Job) {
     changes: job.changes.map(({ refs: _, ...c }) => c),
   };
 }
+/** Validate the batch ID and decode its checkpoint; optionally reject concurrent processors immediately. */
 export async function load(db: pg.Client, id: string, lock = false) {
   if (!z.uuid().safeParse(id).success)
     throw new ContentError("Invalid import ID.");
@@ -188,12 +201,14 @@ export async function load(db: pg.Client, id: string, lock = false) {
   if (!r.rows[0]) throw new ContentError("Import not found.", 404);
   return jobSchema.parse(r.rows[0].payload);
 }
+/** Persist batch metadata and counters within the caller's transaction. */
 async function save(db: pg.Client, id: string, job: Job) {
   await db.query(
     "UPDATE content_import_jobs SET payload=$2::jsonb,updated_at=now() WHERE id=$1",
     [id, JSON.stringify(job)],
   );
 }
+/** Recheck reviewed snapshots and publish pages, relationships and staged vectors in the active transaction. */
 async function apply(db: pg.Client, job: Job, id: string) {
   // Serialize commits. Recheck every reviewed snapshot while holding page locks.
   await db.query("SELECT pg_advisory_xact_lock(724193)");
@@ -252,7 +267,10 @@ async function apply(db: pg.Client, job: Job, id: string) {
   const byPath = new Map<string, number>();
   const byNid = new Map(all.map((p) => [p.nid, p.id]));
   for (const p of all) byPath.set(pathKey(p.url), p.nid);
-  for (const l of job.links) byPath.set(pathKey(l.url), l.nid);
+  for (const l of job.links) {
+    const key = pathKey(l.url);
+    if (key) byPath.set(key, l.nid);
+  }
   const affected = changed.flatMap((c) => (c.nid === null ? [] : [c.nid]));
   const affectedIds = affected.flatMap((n) => {
     const id = byNid.get(n);
@@ -312,9 +330,11 @@ async function apply(db: pg.Client, job: Job, id: string) {
     const key = sec.capNumber + "/" + sec.sectionNumber.replace(/^s/i, "");
     sectionMap.set(key, [...(sectionMap.get(key) ?? []), sec.id]);
   }
-  const pp: { a: number; b: number }[] = [],
-    ss: { a: number; b: number }[] = [],
-    cc: { a: number; b: number }[] = [];
+  // Prisma page-reference edges use A=target and B=source. Legislation
+  // edges instead use A=source page and B=target legislation record.
+  const pageLinks: { a: number; b: number }[] = [],
+    sectionLinks: { a: number; b: number }[] = [],
+    capLinks: { a: number; b: number }[] = [];
   for (const c of changed) {
     if (c.action === "delete" || !c.after) continue;
     const a = c.after,
@@ -327,11 +347,15 @@ async function apply(db: pg.Client, job: Job, id: string) {
       } catch {
         continue;
       }
-      if (u.hostname === "clic.org.hk" && u.pathname.includes("/topics/")) {
+      if (
+        clicHosts.has(u.hostname) &&
+        ["https:", "http:"].includes(u.protocol) &&
+        u.pathname.includes("/topics/")
+      ) {
         const nid = byPath.get(pathKey(u.href)),
           target = nid === undefined ? undefined : byNid.get(nid);
         if (target !== undefined && nid !== undefined && !deleting.has(nid))
-          pp.push({ a: target, b: pid });
+          pageLinks.push({ a: target, b: pid });
         else
           job.warnings.push(
             `Page ${c.secondId}: unresolved CLIC link ${u.pathname}`,
@@ -351,10 +375,10 @@ async function apply(db: pg.Client, job: Job, id: string) {
             .replace(/^s/i, "");
           const targets = sectionMap.get(cap + "/" + section) ?? [];
           if (section && targets.length)
-            for (const id of targets) ss.push({ a: pid, b: id });
+            for (const id of targets) sectionLinks.push({ a: pid, b: id });
           else {
             const capId = capMap.get(cap);
-            if (capId !== undefined) cc.push({ a: pid, b: capId });
+            if (capId !== undefined) capLinks.push({ a: pid, b: capId });
             else
               job.warnings.push(
                 `Page ${c.secondId}: unresolved legislation ${cap}/${section}`,
@@ -368,9 +392,9 @@ async function apply(db: pg.Client, job: Job, id: string) {
     }
   }
   for (const [table, edges] of [
-    ["_ClicPageRelationToClicPage", pp],
-    ["_ClicPageToLegislationSection", ss],
-    ["_ClicPageToLegislationCap", cc],
+    ["_ClicPageRelationToClicPage", pageLinks],
+    ["_ClicPageToLegislationSection", sectionLinks],
+    ["_ClicPageToLegislationCap", capLinks],
   ] satisfies [string, { a: number; b: number }[]][]) {
     await db.query(
       `INSERT INTO "${table}" ("A","B") SELECT a,b FROM jsonb_to_recordset($1::jsonb) AS x(a int,b int) ON CONFLICT DO NOTHING`,
@@ -393,6 +417,7 @@ async function apply(db: pg.Client, job: Job, id: string) {
   if (published.rowCount !== job.total)
     throw new Error("Published chunk count mismatch");
 }
+/** Atomically checkpoint at most 16 embeddings or publish the ready batch; rollback leaves it resumable. */
 export async function advance(db: pg.Client, id: string) {
   await db.query("BEGIN");
   try {

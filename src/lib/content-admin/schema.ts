@@ -23,6 +23,7 @@ export const requestSchema = z.object({
 });
 export type SheetRow = z.infer<typeof rowSchema>;
 export type Action = z.infer<typeof actionSchema>;
+/** Parse inclusive comma/whitespace-separated ranges, rejecting invalid IDs and selections above 500 pages. */
 export function parseIds(value: string): number[] {
   const result = new Set<number>();
   if (!value.trim()) return [];
@@ -48,6 +49,7 @@ export function parseIds(value: string): number[] {
   }
   return [...result].sort((a, b) => a - b);
 }
+/** Build one action per page and reject empty, oversized or overlapping selections. */
 export function selection(input: {
   adds: string;
   updates: string;
@@ -113,6 +115,7 @@ export const viewJobSchema = jobSchema
   });
 export type ViewJob = z.infer<typeof viewJobSchema>;
 export const historySchema = z.object({
+  nextCursor: z.uuid().nullable(),
   jobs: z.array(
     z.object({
       id: z.uuid(),

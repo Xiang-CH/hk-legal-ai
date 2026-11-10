@@ -655,7 +655,9 @@ test(
           } catch (error) {
             if (error instanceof ContentError) {
               if (error.status === 429)
-                assert(Number(failure(error).headers.get("Retry-After")) > 3500);
+                assert(
+                  Number(failure(error).headers.get("Retry-After")) > 3500,
+                );
               return error.status;
             }
             throw error;
@@ -692,5 +694,107 @@ test(
     } finally {
       await Promise.all(clients.map((c) => c.end()));
     }
+  },
+);
+
+test(
+  "reference rebuild recognizes canonical, legacy and relative CLIC links without trusting foreign hosts",
+  live,
+  async () => {
+    for (const ref of [
+      "https://clic.org.hk/en/topics/page-20",
+      "http://www.clic.org.hk/en/topics/page-20",
+      "https://wwwnew.clic.org.hk/en/topics/page-20",
+      "/en/topics/page-20",
+    ]) {
+      await seed();
+      const update = row(100, 10, "Updated");
+      update.html += `<a href="${ref}">Related page</a><a href="https://other.example/en/topics/page-10">External</a><a href="https://wwwnew.clic.org.hk/en/topics/missing">Unresolved legacy page</a>`;
+      const job = await prepare(db, {
+        fileName: "legacy-links.xlsx",
+        adds: "",
+        updates: "100",
+        deletes: "",
+        rows: [update],
+        links: [{ nid: 10, url: "https://other.example/en/topics/page-20" }],
+      });
+      await advance(db, job.id);
+      const completed = await advance(db, job.id);
+      assert.equal(completed.status, "complete");
+      assert(
+        completed.warnings.some((w) =>
+          w.includes("unresolved CLIC link /en/topics/missing"),
+        ),
+      );
+      const edges = await db.query(
+        `SELECT target.nid AS target,source.nid AS source FROM "_ClicPageRelationToClicPage" r JOIN "ClicPage" target ON target.id=r."A" JOIN "ClicPage" source ON source.id=r."B"`,
+      );
+      assert.deepEqual(edges.rows, [{ target: 20, source: 10 }], ref);
+    }
+  },
+);
+
+test(
+  "paginated history keeps older interrupted batches reachable and validates cursors",
+  live,
+  async () => {
+    const { GET } =
+      await import("../../src/app/clic-chat-hkulaw/api/internal/content/route");
+    const { historySchema } =
+      await import("../../src/lib/content-admin/schema");
+    const { randomUUID } = await import("node:crypto");
+    await seed();
+    await db.query("TRUNCATE content_admin_login_limits");
+    const key = "content-test-key-at-least-24-characters";
+    process.env.CLIC_CONTENT_ADMIN_TOKEN = key;
+    const token = await login(
+      db,
+      new Request("http://localhost/api", {
+        method: "POST",
+        headers: { Origin: "http://localhost", Authorization: "Bearer " + key },
+      }),
+    );
+    const old = await prepare(db, {
+      fileName: "Interrupted.xlsx",
+      adds: "",
+      updates: "100",
+      deletes: "",
+      rows: [row(100, 10)],
+      links: [],
+    });
+    await advance(db, old.id);
+    await db.query(
+      "UPDATE content_import_jobs SET created_at=now()-interval '1 day' WHERE id=$1",
+      [old.id],
+    );
+    // Equal timestamps exercise the ID tiebreaker between history pages.
+    for (let i = 0; i < 25; i++)
+      await db.query(
+        "INSERT INTO content_import_jobs (id,payload,created_at) VALUES ($1,$2,'2027-01-01T00:00:00Z')",
+        [
+          randomUUID(),
+          JSON.stringify({ fileName: `Newer ${i}`, status: "preview" }),
+        ],
+      );
+    const request = (query = "") =>
+      new Request("http://localhost/api" + query, {
+        headers: { Cookie: SESSION_COOKIE + "=" + token },
+      });
+    const first = historySchema.parse(await (await GET(request())).json());
+    assert.equal(first.jobs.length, 20);
+    assert(first.nextCursor);
+    assert(!first.jobs.some((j) => j.id === old.id));
+    const second = historySchema.parse(
+      await (await GET(request("?before=" + first.nextCursor))).json(),
+    );
+    assert.equal(second.jobs.length, 6);
+    assert.equal(second.nextCursor, null);
+    assert.equal(
+      new Set([...first.jobs, ...second.jobs].map((j) => j.id)).size,
+      26,
+    );
+    assert(second.jobs.some((j) => j.id === old.id && j.status === "indexing"));
+    assert.equal((await advance(db, old.id)).status, "complete");
+    assert.equal((await GET(request("?before=invalid"))).status, 400);
   },
 );

@@ -15,6 +15,7 @@ const DiffViewer = dynamic(() => import("react-diff-viewer-continued"), {
 
 type Change = ViewJob["changes"][number];
 
+/** Serialize article fields in a stable order; an absent side is empty for add/delete diffs. */
 function documentText(page: Change["before"] | Change["after"]): string {
   if (!page) return "";
   return [
@@ -27,6 +28,7 @@ function documentText(page: Change["before"] | Change["after"]): string {
   ].join("\n");
 }
 
+/** Mount the diff engine only while expanded and constrain wide comparisons to their scroll region. */
 export default function ContentDiff({ change }: { change: Change }) {
   const [open, setOpen] = useState(false);
   const [split, setSplit] = useState(false);

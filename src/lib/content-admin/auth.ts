@@ -19,6 +19,7 @@ export class ContentError extends Error {
     super(message);
   }
 }
+/** Fail closed when shared-key administration has not been configured. */
 function adminKey() {
   const key = process.env.CLIC_CONTENT_ADMIN_TOKEN;
   if (!key || key.length < 24)
@@ -50,6 +51,7 @@ export function checkOrigin(request: Request) {
   )
     throw new ContentError("Cross-origin requests are not allowed.", 403);
 }
+/** Accept only the server-issued opaque token format from the scoped session cookie. */
 function sessionToken(request: Request) {
   const value = request.headers
     .get("cookie")
@@ -116,11 +118,12 @@ export async function login(db: pg.Client, request: Request) {
     "DELETE FROM content_admin_sessions WHERE expires_at <= now()",
   );
   await db.query(
-    "INSERT INTO content_admin_sessions (token_hash,key_hash,expires_at) VALUES ($1,$2,now()+interval '7 days')",
-    [hash(token), keyVersion(expected)],
+    "INSERT INTO content_admin_sessions (token_hash,key_hash,expires_at) VALUES ($1,$2,now()+$3::int*interval '1 second')",
+    [hash(token), keyVersion(expected), SESSION_SECONDS],
   );
   return token;
 }
+/** Revoke the browser's server-side session; expired or absent sessions can still be signed out. */
 export async function logout(db: pg.Client, request: Request) {
   checkOrigin(request);
   const token = sessionToken(request);
@@ -129,6 +132,7 @@ export async function logout(db: pg.Client, request: Request) {
       hash(token),
     ]);
 }
+/** Return safe client errors with uncached responses and a retry delay for throttled logins. */
 export function failure(error: unknown) {
   const status =
     error instanceof ContentError

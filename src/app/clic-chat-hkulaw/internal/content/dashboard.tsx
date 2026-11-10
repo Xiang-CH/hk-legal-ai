@@ -19,11 +19,13 @@ const field =
   "w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-base sm:text-sm text-neutral-900 focus:outline-2 focus:outline-offset-2 focus:outline-neutral-800 disabled:opacity-50";
 const button =
   "rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-40 hover:bg-neutral-700";
+/** Coordinate staff login, workbook selection and resumable imports without storing the shared key. */
 export default function ContentDashboard() {
   const [key, setKey] = useState(""),
     [unlocked, setUnlocked] = useState(false),
     [checkingSession, setCheckingSession] = useState(true),
-    [history, setHistory] = useState<History>([]);
+    [history, setHistory] = useState<History>([]),
+    [historyCursor, setHistoryCursor] = useState<string | null>(null);
   const [workbook, setWorkbook] = useState<Workbook | null>(null),
     [fileName, setFileName] = useState("");
   const [adds, setAdds] = useState(""),
@@ -36,6 +38,7 @@ export default function ContentDashboard() {
   const active = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    /** Restore an existing cookie session and history, ignoring results after unmount. */
     async function restoreSession() {
       try {
         const response = await fetch(api + "/session", {
@@ -51,6 +54,7 @@ export default function ContentDashboard() {
         const data = historySchema.parse(await readResponse(historyResponse));
         if (!cancelled) {
           setHistory(data.jobs);
+          setHistoryCursor(data.nextCursor);
           setUnlocked(true);
         }
       } catch (error) {
@@ -75,6 +79,7 @@ export default function ContentDashboard() {
     },
     [],
   );
+  /** Send a session-authenticated request and clear protected UI when the session is rejected. */
   async function request(path: string, init?: RequestInit) {
     const response = await fetch(path, {
       ...init,
@@ -85,10 +90,12 @@ export default function ContentDashboard() {
       setUnlocked(false);
       setJob(null);
       setHistory([]);
+      setHistoryCursor(null);
     }
     return readResponse(response);
   }
 
+  /** Track the active operation and display a recoverable error while always releasing the busy state. */
   async function attempt(run: () => Promise<void>) {
     setError("");
     setBusy(true);
@@ -101,8 +108,24 @@ export default function ContentDashboard() {
     }
   }
   async function refresh() {
-    setHistory(historySchema.parse(await request(api)).jobs);
+    const data = historySchema.parse(await request(api));
+    setHistory(data.jobs);
+    setHistoryCursor(data.nextCursor);
   }
+  /** Append the next history page so interrupted batches remain reachable after newer previews. */
+  async function olderBatches() {
+    if (!historyCursor) return;
+    const data = historySchema.parse(
+      await request(api + "?before=" + historyCursor),
+    );
+    setHistory((current) => [
+      ...new Map(
+        [...current, ...data.jobs].map((job) => [job.id, job]),
+      ).values(),
+    ]);
+    setHistoryCursor(data.nextCursor);
+  }
+  /** Exchange the shared key for a persistent session and immediately clear the key from memory. */
   async function unlock() {
     await attempt(async () => {
       await request(api + "/session", {
@@ -114,6 +137,7 @@ export default function ContentDashboard() {
       setUnlocked(true);
     });
   }
+  /** Parse a bounded workbook locally and discard any preview from the previous file. */
   async function upload(file: File | undefined) {
     if (!file) return;
     await attempt(async () => {
@@ -126,6 +150,7 @@ export default function ContentDashboard() {
       setFileName(file.name);
     });
   }
+  /** Send only selected rows and reference mappings after enforcing the hosting request-size limit. */
   async function preview() {
     await attempt(async () => {
       if (!workbook) return;
@@ -159,6 +184,7 @@ export default function ContentDashboard() {
       setJob(viewJobSchema.parse(await request(api + "/" + id)));
     });
   }
+  /** Advance the saved batch until publication or interruption; the server owns durable progress. */
   async function apply() {
     if (!job || active.current) return;
     active.current = true;
@@ -226,6 +252,7 @@ export default function ContentDashboard() {
                   setUnlocked(false);
                   setJob(null);
                   setHistory([]);
+                  setHistoryCursor(null);
                   setWorkbook(null);
                   setFileName("");
                   setAdds("");
@@ -603,6 +630,15 @@ export default function ContentDashboard() {
                   ))
                 )}
               </div>
+              {historyCursor && (
+                <button
+                  className={button + " mt-3"}
+                  disabled={busy}
+                  onClick={() => void attempt(olderBatches)}
+                >
+                  Load older batches
+                </button>
+              )}
             </section>
           </>
         )}
