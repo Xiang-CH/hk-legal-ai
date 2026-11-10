@@ -14,13 +14,15 @@
     "db:push": "prisma db push",
     "db:format": "prisma format",
     "db:studio": "prisma studio",
-    "upsert-clic": "uvx --with openpyxl --with markdownify python scripts/upsert_clic_selection.py"
+    "upsert-clic": "uvx --with openpyxl --with markdownify python scripts/upsert_clic_selection.py",
+    "test:content-admin": "tsx --test tests/content-admin/content-admin.test.ts"
   },
   "dependencies": {
     "@ai-sdk/azure": "4.0.76",
     "@ai-sdk/openai": "4.0.72",
     "@ai-sdk/react": "4.0.112",
     "@hookform/resolvers": "^5.2.2",
+    "@langchain/core": "0.3.62",
     "@langchain/textsplitters": "^0.1.0",
     "@langfuse/otel": "^5.11.1",
     "@langfuse/tracing": "^5.11.1",
@@ -60,6 +62,8 @@
     "cmdk": "^1.1.1",
     "date-fns": "^4.1.0",
     "embla-carousel-react": "^8.6.0",
+    "exceljs": "^4.4.0",
+    "fflate": "^0.8.3",
     "framer-motion": "^12.38.0",
     "geist": "^1.7.0",
     "input-otp": "^1.4.2",
@@ -72,6 +76,7 @@
     "pg": "^8.16.3",
     "react": "^19.2.4",
     "react-day-picker": "^9.14.0",
+    "react-diff-viewer-continued": "^4.4.0",
     "react-dom": "^19.2.4",
     "react-hook-form": "^7.72.1",
     "react-markdown": "^10.1.0",
@@ -81,6 +86,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.5.0",
     "tedious": "^18.6.1",
+    "turndown": "^7.2.5",
     "usehooks-ts": "^3.1.1",
     "vaul": "^1.1.2",
     "zod": "^4.3.6"
@@ -92,6 +98,7 @@
     "@types/pg": "^8.15.5",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/turndown": "^5.0.6",
     "csv-parser": "^3.2.0",
     "eslint": "^9.39.4",
     "eslint-config-next": "16.1.1",
@@ -99,6 +106,7 @@
     "prisma": "^6.19.3",
     "prisma-dbml-generator": "^0.12.0",
     "tailwindcss": "^4.2.2",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.4.0",
     "typescript": "^5.9.3"
   }
