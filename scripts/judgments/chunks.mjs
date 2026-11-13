@@ -46,7 +46,8 @@ export function buildChunks(blocks, metadata = {}, options = {}) {
  flush(); return result;
 }
 /** Generate a bounded document batch, reusing matching inputs and publishing only the selected current generation in apply mode. */
-export async function generateChunks({client,limit=100,afterId=0,apply=false,...options}) {
+export async function generateChunks({client,limit=100,afterId=0,apply=false,fast=false,...options}) {
+ if(fast){const {generateChunksBatched}=await import('./chunks-batched.mjs');return generateChunksBatched({client,limit,afterId,apply,...options});}
  if(!Number.isSafeInteger(limit)||limit<1||!Number.isSafeInteger(afterId)||afterId<0)throw Error('Invalid pagination bounds');
  const documents=(await client.query('SELECT id,judgment_id FROM judgment_documents WHERE id>$1 ORDER BY id LIMIT $2',[afterId,limit])).rows;
  let count=0,totalTokens=0,lastDocumentId=afterId;

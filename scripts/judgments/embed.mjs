@@ -11,15 +11,20 @@ export async function embedPending({client,embed,batchSize=8,limit=100,apply=fal
  const estimate=rows.reduce((sum,row)=>sum+tokenCost(row),0); if(!apply) return {pending:rows.length,tokens:estimate};
  if(!approveCost||!Number.isSafeInteger(maxTokens)||maxTokens<=0) throw Error('Explicit cost approval and positive token ceiling required');
  let spent=0,ready=0,requests=0,failed=0;
- const save=async(row,vector,attempts=1)=>{
-  await client.query(`UPDATE judgment_fulltext_chunks SET embedding=$2::halfvec,status='ready',error=NULL,attempts=attempts+$3 WHERE id=$1`,[row.id,typeof vector==='string'?vector:JSON.stringify(vector),attempts]);ready++;
+ const save=async(items,attempts=1)=>{
+  if(!items.length)return;
+  await client.query(`UPDATE judgment_fulltext_chunks c SET embedding=v.embedding::halfvec,status='ready',error=NULL,attempts=c.attempts+$2
+   FROM jsonb_to_recordset($1::jsonb) AS v(id bigint,embedding text) WHERE c.id=v.id`,[JSON.stringify(items.map(({row,vector})=>({id:row.id,embedding:typeof vector==='string'?vector:JSON.stringify(vector)}))),attempts]);ready+=items.length;
  };
  for(let offset=0;offset<rows.length;offset+=batchSize) {
-  const pending=[];
-  for(const row of rows.slice(offset,offset+batchSize)) {
-   const cached=await client.query(`SELECT embedding::text FROM judgment_fulltext_chunks WHERE input_checksum=$1 AND embedding_input=$2 AND model=$3 AND deployment=$4 AND model_version=$5 AND status='ready' AND embedding IS NOT NULL LIMIT 1`,[row.input_checksum,row.embedding_input,row.model,row.deployment,row.model_version]);
-   if(cached.rows[0]?.embedding)await save(row,cached.rows[0].embedding);else pending.push(row);
-  }
+  const batch=rows.slice(offset,offset+batchSize);
+  const cached=(await client.query(`SELECT DISTINCT ON (r.id) r.id,c.embedding::text AS embedding
+   FROM jsonb_to_recordset($1::jsonb) AS r(id bigint,input_checksum text,embedding_input text,model text,deployment text,model_version text)
+   JOIN judgment_fulltext_chunks c ON c.input_checksum=r.input_checksum AND c.embedding_input=r.embedding_input AND c.model=r.model AND c.deployment=r.deployment AND c.model_version=r.model_version
+   WHERE c.status='ready' AND c.embedding IS NOT NULL ORDER BY r.id,c.id`,[JSON.stringify(batch.map(({id,input_checksum,embedding_input,model,deployment,model_version})=>({id,input_checksum,embedding_input,model,deployment,model_version})))])).rows;
+  const cache=new Map(cached.map(row=>[String(row.id),row.embedding]));
+  await save(batch.filter(row=>cache.has(String(row.id))).map(row=>({row,vector:cache.get(String(row.id))})));
+  const pending=batch.filter(row=>!cache.has(String(row.id)));
   const groups=new Map();
   for(const row of pending){const key=JSON.stringify([row.model,row.deployment,row.model_version]);groups.set(key,[...(groups.get(key)??[]),row]);}
   for(const group of groups.values()) {
@@ -42,9 +47,9 @@ export async function embedPending({client,embed,batchSize=8,limit=100,apply=fal
     }
     const beforeSave=ready;
     await client.query('BEGIN');
-    try{for(let index=0;index<group.length;index++)await save(group[index],vectors[index],attempts);await client.query('COMMIT');}
+    try{await save(group.map((row,index)=>({row,vector:vectors[index]})),attempts);await client.query('COMMIT');}
     catch(error){await client.query('ROLLBACK');ready=beforeSave;throw error;}
-   }catch(error){if(['EMBEDDING_BUDGET_ACCOUNTING_FAILED','UNEXPECTED_EMBEDDING_MODEL'].includes(error.code))throw error;for(const row of group)await client.query(`UPDATE judgment_fulltext_chunks SET status='failed',error=$2,attempts=attempts+$3 WHERE id=$1`,[row.id,String(error.message),attempts]);failed+=group.length;}
+   }catch(error){if(['EMBEDDING_BUDGET_ACCOUNTING_FAILED','UNEXPECTED_EMBEDDING_MODEL'].includes(error.code))throw error;await client.query(`UPDATE judgment_fulltext_chunks SET status='failed',error=$2,attempts=attempts+$3 WHERE id=ANY($1::bigint[])`,[group.map(row=>row.id),String(error.message),attempts]);failed+=group.length;}
   }
  }
  return {ready,failed,requests,tokens:spent};

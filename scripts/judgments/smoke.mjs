@@ -42,7 +42,7 @@ try {
   const auditRows=auditOutput.trim().split('\n').map(line=>JSON.parse(line));
   assert.equal(auditRows.filter(row=>row.status==='matched').length,2);
   assert.equal(auditRows.filter(row=>row.kind==='sidecar').length,1);
-  const config = {client,root,apply:true,databaseUrl,testDatabase:true};
+  const config = {client,root,apply:true,databaseUrl,testDatabase:true,fast:process.argv.includes('--fast'),concurrency:2};
   const first = await importCorpus(config);
   assert.equal(first.outcomes.filter(row=>row.status==='imported').length,2);
   const second = await importCorpus(config);
@@ -51,7 +51,7 @@ try {
   assert(paragraphs.rows.find(row=>row.anchor==='p1').content.includes('Continuation'));
   assert(paragraphs.rows.some(row=>row.block_type==='table'));
   assert(!paragraphs.rows.some(row=>row.content.includes('excluded')));
-  await resolveReferences({client,root,apply:true});
+  await resolveReferences({client,root,apply:true,batchSize:process.argv.includes('--fast')?64:1});
   const refs = await readReferences(client,2,{direction:'incoming'});
   assert(refs.references.some(row=>row.source_id===1));
   const outgoing=(await readReferences(client,1,{limit:100})).references;
@@ -69,9 +69,9 @@ try {
   assert.equal(legislation.filter(row=>row.status==='not-in-corpus').length,1);
   assert.equal((await client.query('SELECT count(*)::int AS count FROM judgment_managed_legislation_links WHERE source_id=1')).rows[0].count,2);
   assert.equal((await client.query('SELECT count(*)::int AS count FROM "_JudgmentToLegislationSection" WHERE "A"=1')).rows[0].count,2);
-  await resolveReferences({client,root,apply:true});
+  await resolveReferences({client,root,apply:true,batchSize:process.argv.includes('--fast')?64:1});
   assert.equal((await readReferences(client,2,{direction:'incoming'})).references.length,refs.references.length);
-  const generated = await generateChunks({client,apply:true});
+  const generated = await generateChunks({client,apply:true,fast:process.argv.includes('--fast')});
   assert(generated.chunks>=2);
   assert((await searchChunks({client,query:'landlord'})).some(row=>row.judgment_id===1));
   assert((await searchChunks({client,query:'損害賠償'})).some(row=>row.judgment_id===3));
@@ -93,11 +93,11 @@ try {
   const currentSource=JSON.parse(await readFile(path.join(source,'EN.json'),'utf8'));
   await writeFile(path.join(source,'EN.json'),JSON.stringify({...currentSource,sourceRevision:2}));
   await importCorpus(config);
-  await generateChunks({client,apply:true});
+  await generateChunks({client,apply:true,fast:process.argv.includes('--fast')});
   const cached=await embedPending({client,embed:async()=>{throw Error('Unchanged embedding input must reuse cache');},apply:true,approveCost:true,maxTokens:10000,testProvider:true,retries:0});
   assert.equal(cached.requests,0);
   assert(cached.ready>0);
-  await generateChunks({client,apply:true,modelVersion:'test-next'});
+  await generateChunks({client,apply:true,fast:process.argv.includes('--fast'),modelVersion:'test-next'});
   const activeBefore=(await client.query('SELECT * FROM judgment_fulltext_active ORDER BY document_id')).rows;
   const denied=await embedPending({client,embed,apply:true,approveCost:true,maxTokens:1,testProvider:true});
   assert(denied.budgetExhausted);
@@ -127,7 +127,7 @@ try {
   const chineseSource=JSON.parse(await readFile(path.join(source,'tc.json'),'utf8'));
   await writeFile(path.join(source,'tc.json'),JSON.stringify({...chineseSource,noteup_links:{legis:['/en/legis/reg/336H/s22']}}));
   await importCorpus(config);
-  await resolveReferences({client,root,apply:true});
+  await resolveReferences({client,root,apply:true,batchSize:process.argv.includes('--fast')?64:1});
   assert.equal((await client.query('SELECT count(*)::int AS count FROM judgment_managed_legislation_links WHERE source_id=3 AND section_id=2')).rows[0].count,1);
   console.log(JSON.stringify({passed:true,documents:2,chunks:generated.chunks,providerCalls:calls,checks:['idempotent import','layout table paragraphs','continuations','tables','citation direction','reference reruns','bilingual lexical retrieval','source spans','embedding persistence','no-op embedding rerun','stale generation exclusion']}));
 } finally {

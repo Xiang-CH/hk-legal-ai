@@ -7,9 +7,10 @@ import { parseJudgment, PARSER_VERSION } from './parse.mjs';
 import { verifyWriteAccess } from './db.mjs';
 import { clearManagedLinks } from './legislation-links.mjs';
 /** Import checksum-matched source documents transactionally per judgment; quarantine failures and preserve the previous generation. Dry runs never write. */
-export async function importCorpus({client, root, apply=false, limit=Infinity, ...safety}) {
+export async function importCorpus({client, root, apply=false, limit=Infinity, fast=false, concurrency=4, ingestBatchSize=64, onProgress, ...safety}) {
   await verifyWriteAccess({apply,...safety});
   if (!root || !(limit >= 0)) throw new Error('root and nonnegative limit required');
+  if(fast){const {importBatched}=await import('./ingest-batched.mjs');return importBatched({client,root,apply,limit,concurrency,ingestBatchSize,onProgress,...safety});}
   root = path.resolve(root);
   const runId = randomUUID(), outcomes = [];
   if(apply) {

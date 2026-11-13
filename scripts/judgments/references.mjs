@@ -55,8 +55,11 @@ function choose(rows, language) {
 const values = _value => Array.isArray(_value) ? _value.filter(_value2=>typeof _value2==='string') : [];
 
 /** Resolve current-generation evidence per document, retaining ambiguous/pending references and provenance. Apply mode replaces each source transactionally. */
-export async function resolveReferences({client,root,limit=Infinity,apply=false,outcomeLimit=1000}) {
+export async function resolveReferences({client,root,limit=Infinity,apply=false,outcomeLimit=1000,batchSize=1,onProgress}) {
   if (!root || !(limit===Infinity || Number.isSafeInteger(limit) && limit>=0)) throw new Error('root and nonnegative integer limit required');
+  if(!Number.isSafeInteger(batchSize)||batchSize<1||batchSize>128)throw Error('Invalid reference batch size');
+  const prepared=[];let pageHtml=new Map(),pageParagraphs=new Map(),documentIndex=0;
+  const flushPrepared=async()=>{if(!prepared.length)return;const {writeReferenceBatch}=await import('./references-batched.mjs');await writeReferenceBatch(client,prepared);prepared.length=0;};
   const judgments = (await client.query('SELECT id,"neutralCitation","courtName",year,number,"languageCode",url,"legalrefUrl" FROM "Judgment"')).rows;
   const documents = (await client.query('SELECT id,judgment_id,source_path,source_checksum,generation FROM judgment_documents ORDER BY id')).rows;
   const aliases = (await client.query('SELECT "judgmentId" AS judgment_id,citation AS original FROM "ParallelCitations"')).rows;
@@ -116,14 +119,20 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
     } catch(error) {await client.query('ROLLBACK');throw error;}
   }
   for (const metadata of documents.slice(0,limit)) {
-    const doc = {...metadata,...(await client.query('SELECT raw_html FROM judgment_documents WHERE id=$1',[metadata.id])).rows[0]};
+    if(batchSize>1 && documentIndex%batchSize===0){
+      const ids=documents.slice(documentIndex,Math.min(documentIndex+batchSize,limit)).map(d=>d.id);
+      pageHtml=new Map((await client.query('SELECT id,raw_html FROM judgment_documents WHERE id=ANY($1::bigint[])',[ids])).rows.map(r=>[String(r.id),r.raw_html]));
+      pageParagraphs=new Map();for(const row of (await client.query('SELECT id,document_id,anchor,html,content FROM judgment_paragraphs WHERE document_id=ANY($1::bigint[]) ORDER BY document_id,position',[ids])).rows){const k=String(row.document_id);const group=pageParagraphs.get(k)??[];group.push(row);pageParagraphs.set(k,group);}
+    }
+    documentIndex++;
+    const doc = {...metadata,...(batchSize>1?{raw_html:pageHtml.get(String(metadata.id))}:(await client.query('SELECT raw_html FROM judgment_documents WHERE id=$1',[metadata.id])).rows[0])};
     const source = byId.get(doc.judgment_id);
     if (!source) continue;
     const sourceFile=path.resolve(root,doc.source_path);
     if(await checksum(sourceFile)!==doc.source_checksum) {record({sourceId:source.id,status:'stale-source'});continue;}
     const data = JSON.parse(await readFile(sourceFile,'utf8'));
     const evidence = [];
-    const paragraphs = (await client.query('SELECT id,anchor,html,content FROM judgment_paragraphs WHERE document_id=$1',[doc.id])).rows;
+    const paragraphs = batchSize>1?pageParagraphs.get(String(doc.id))??[]:(await client.query('SELECT id,anchor,html,content FROM judgment_paragraphs WHERE document_id=$1',[doc.id])).rows;
     for (const paragraph of paragraphs) {
       for (const _referenceEvidence of inspect(paragraph.html ?? '').filter(item=>item.kind==='url')) evidence.push({..._referenceEvidence,paragraph_id:paragraph.id,anchor:paragraph.anchor ?? _referenceEvidence.anchor});
       for (const pattern of [neutral,reported,foreign]) for (const match of paragraph.content.matchAll(pattern)) evidence.push({kind:'citation',original:match[0],paragraph_id:paragraph.id,anchor:paragraph.anchor,offset:match.index,method:'paragraph-text'});
@@ -136,9 +145,9 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
       evidence.push({kind:'citation',original,method:'noteup',confirmed:evidence.some(_referenceEvidence2=>normalize(_referenceEvidence2.original)===normalize(original) || normalize(_referenceEvidence2.text ?? '')===normalize(original))});
     }
     for (const original of values(notes.legis)) evidence.push({kind:'url',original,method:'noteup-legislation'});
-    if (apply) await client.query('BEGIN');
+    if (apply && batchSize===1) await client.query('BEGIN');
     try {
-      if (apply) {
+      if (apply && batchSize===1) {
         await client.query('SELECT id FROM "Judgment" WHERE id=$1 FOR UPDATE',[source.id]);
         const current=(await client.query('SELECT generation::text FROM judgment_documents WHERE id=$1',[doc.id])).rows[0];
         if(current?.generation!==String(doc.generation)) {await client.query('ROLLBACK');record({sourceId:source.id,status:'generation-changed'});continue;}
@@ -184,7 +193,8 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
         }
         record({sourceId:source.id,original:_referenceEvidence3.original,...result});
       }
-      if(apply) {
+      if(apply && batchSize>1){prepared.push({sourceId:source.id,documentId:doc.id,generation:doc.generation,references:[...referenceRows.values()],legislation:[...legislationRows.values()],occurrences:occurrenceRows});if(prepared.length>=batchSize)await flushPrepared();}
+      if(apply && batchSize===1) {
         if(referenceRows.size) {
           const inserted=await client.query(`INSERT INTO judgment_references(source_id,kind,original,normalized,status,target_id,candidates,provenance,resolver_version)
             SELECT source_id,kind,original,normalized,status,target_id,candidates,provenance,resolver_version FROM jsonb_to_recordset($1::jsonb)
@@ -201,8 +211,10 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
           AS records(source_id int,original text,normalized text,status text,cap_id int,section_id int,candidates jsonb,provenance jsonb)`,[JSON.stringify([...legislationRows.values()])]);
         await syncManagedLinks(client,source.id);await client.query('COMMIT');
       }
-    } catch(_error2) { if(apply) await client.query('ROLLBACK'); throw _error2; }
+    } catch(_error2) { if(apply && batchSize===1) await client.query('ROLLBACK'); throw _error2; }
+    if(documentIndex%batchSize===0)onProgress?.({documents:documentIndex,counts});
   }
+  if(apply)await flushPrepared();
   return {apply,version:VERSION,counts,outcomes};
 }
 

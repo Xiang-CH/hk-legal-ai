@@ -11,7 +11,7 @@ import { generateChunks } from './chunks.mjs';
 import { embedPending,azureEmbed } from './embed.mjs';
 import { readBudget,reserveBudgetTokens,recordProviderUsage } from './budget.mjs';
 
-const {values:options}=parseArgs({options:{phase:{type:'string'},dir:{type:'string'},apply:{type:'boolean',default:false},all:{type:'boolean',default:false},limit:{type:'string',default:'100'},after:{type:'string',default:'0'},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'},'approve-cost':{type:'boolean',default:false},'max-tokens':{type:'string',default:'0'},'batch-size':{type:'string',default:'16'},'require-vectors':{type:'boolean',default:false},'ack-destructive':{type:'boolean',default:false},'budget-file':{type:'string'},'budget-scope':{type:'string',default:'full'},'allow-production':{type:'boolean',default:false},'restore-receipt':{type:'string'},'accept-azure-ai-omission':{type:'boolean',default:false}}});
+const {values:options}=parseArgs({options:{phase:{type:'string'},fast:{type:'boolean',default:false},concurrency:{type:'string',default:'4'},dir:{type:'string'},apply:{type:'boolean',default:false},all:{type:'boolean',default:false},limit:{type:'string',default:'100'},after:{type:'string',default:'0'},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'},'approve-cost':{type:'boolean',default:false},'max-tokens':{type:'string',default:'0'},'batch-size':{type:'string',default:'16'},'require-vectors':{type:'boolean',default:false},'ack-destructive':{type:'boolean',default:false},'budget-file':{type:'string'},'budget-scope':{type:'string',default:'full'},'allow-production':{type:'boolean',default:false},'restore-receipt':{type:'string'},'accept-azure-ai-omission':{type:'boolean',default:false}}});
 const phases=['ingest','references','chunks','embed','verify','migrate','rollback'];
 if(!phases.includes(options.phase))throw Error(`Choose --phase ${phases.join('|')}`);
 const limit=Number(options.limit),afterId=Number(options.after),maxTokens=Number(options['max-tokens']),batchSize=Number(options['batch-size']);
@@ -39,18 +39,18 @@ if(options.phase==='migrate'){
  try{
   if(!options.apply)await client.query('BEGIN READ ONLY');
   if(options.phase==='ingest'){
-   const result=await importCorpus({client,root:options.dir,...safety,limit:options.all?Infinity:limit});
+   const result=await importCorpus({client,root:options.dir,...safety,fast:options.fast,concurrency:Number(options.concurrency),onProgress:progress=>console.log(JSON.stringify({phase:'ingest',...progress})),limit:options.all?Infinity:limit});
    const counts=result.outcomes.reduce((summary,row)=>(summary[row.status]=(summary[row.status]??0)+1,summary),{});
    console.log(JSON.stringify({runId:result.runId,counts,apply:options.apply}));
    if(counts.quarantined)process.exitCode=2;
   }else if(options.phase==='references'){
-   const result=await resolveReferences({client,root:options.dir,apply:options.apply,limit:options.all?Infinity:limit});
+   const result=await resolveReferences({client,root:options.dir,apply:options.apply,batchSize:options.fast?64:1,onProgress:progress=>console.log(JSON.stringify({phase:'references',...progress})),limit:options.all?Infinity:limit});
    console.log(JSON.stringify(result));
   }else if(options.phase==='chunks'){
    let cursor=afterId;
    const total={documents:0,chunks:0,tokens:0,lastDocumentId:cursor};
    for(;;){
-    const result=await generateChunks({client,apply:options.apply,limit,afterId:cursor});
+    const result=await generateChunks({client,apply:options.apply,fast:options.fast,limit,afterId:cursor});
     for(const key of ['documents','chunks','tokens'])total[key]+=result[key];
     total.lastDocumentId=result.lastDocumentId;
     console.log(JSON.stringify({phase:'chunks',...result,apply:options.apply}));
