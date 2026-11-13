@@ -5,10 +5,11 @@
  * Query side MUST use the same function so q-grams match stored cjk_tokens.
  */
 export function cjkTokens(s: string): string {
-	const cjk = s.match(/[一-鿿㐀-䶿豈-﫿]+/gu) ?? [];
-	const grams = cjk.flatMap((w) =>
-		w.length < 2 ? [w] : Array.from({ length: w.length - 1 }, (_, i) => w.slice(i, i + 2)),
-	);
+	const cjk = s.match(/\p{Script=Han}+/gu) ?? [];
+	const grams = cjk.flatMap((w) => {
+		const characters = Array.from(w);
+		return characters.length < 2 ? [w] : characters.slice(0, -1).map((character, i) => character + characters[i + 1]);
+	});
 	const words = s.toLowerCase().match(/[a-z0-9]+/g) ?? [];
 	return [...grams, ...words].join(" ");
 }

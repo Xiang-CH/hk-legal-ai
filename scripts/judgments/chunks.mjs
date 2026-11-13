@@ -6,7 +6,7 @@ const tokenizer = getEncoding('o200k_base');
 export const hash = _textValue => createHash('sha256').update(_textValue).digest('hex');
 export const tokens = _textValue2 => tokenizer.encode(_textValue2).length;
 /** Produce adjacent Han-character bigrams plus Latin tokens for bilingual lexical matching. */
-export const cjk = _textValue3 => (_textValue3.match(/[\p{Script=Han}]+/gu) ?? []).flatMap(word => word.length < 2 ? [word] : Array.from({length:word.length-1},(_unused,index)=>word.slice(index,index+2))).concat(_textValue3.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ');
+export const cjk = _textValue3 => (_textValue3.match(/[\p{Script=Han}]+/gu) ?? []).flatMap(word => {const characters=Array.from(word);return characters.length<2?[word]:characters.slice(0,-1).map((character,index)=>character+characters[index+1]);}).concat(_textValue3.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ');
 /** Split ordered blocks into bounded, overlapping chunks with exact source spans and metadata-prefixed embedding inputs. */
 export function buildChunks(blocks, metadata = {}, options = {}) {
  const target = options.targetTokens ?? 600, max = options.maxTokens ?? 800;
