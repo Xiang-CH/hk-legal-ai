@@ -21,6 +21,7 @@ export function useScroll<T extends HTMLElement>(followChanges = false): [
       const onScroll = () => {
         following.current = container.scrollHeight - container.clientHeight - container.scrollTop < 64;
       };
+      onScroll();
       container.addEventListener("scroll", onScroll, { passive: true });
       const observer = new MutationObserver(() => {
         if (!following.current) return;

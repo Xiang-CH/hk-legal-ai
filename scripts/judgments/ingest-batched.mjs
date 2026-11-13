@@ -59,6 +59,7 @@ export async function importBatched({client,root,apply=false,limit=Infinity,data
   const identities=new Map();
   for(const r of (await client.query('SELECT id,"courtName",year,number,"languageCode" FROM "Judgment"')).rows){const k=key({court:r.courtName,year:r.year,number:r.number,language:r.languageCode});identities.set(k,[...(identities.get(k)??[]),r.id]);}
   const existing=new Map((await client.query('SELECT judgment_id,source_path,source_checksum,parser_version FROM judgment_documents')).rows.map(d=>[d.source_path,d]));
+  const existingById=new Map([...existing.values()].map(d=>[d.judgment_id,d]));
   let batch=[],bytes=0,pending=[],files=0;
   const dispatch=async()=>{if(!batch.length)return;const current=batch;batch=[];bytes=0;if(!apply){await queueRecord(current.map(r=>({sourcePath:r.sourcePath,checksum:r.checksum,status:'would-import'})));return;}const job=save(current).catch(error=>{fatal??=error;}).finally(()=>jobs.delete(job));jobs.add(job);if(jobs.size>=concurrency)await Promise.race(jobs);if(fatal)throw fatal;};
   for await(const file of walk(root)){
@@ -72,6 +73,8 @@ export async function importBatched({client,root,apply=false,limit=Infinity,data
      const matches=identities.get(key(identity))??[];if(matches.length!==1)throw Error(matches.length?'Ambiguous judgment identity':'Unmatched judgment identity');
      const judgmentId=matches[0];if(seen.has(judgmentId))throw Error('Duplicate source identity');seen.add(judgmentId);
      const previous=existing.get(sourcePath);
+     const byJudgment=existingById.get(judgmentId);
+     if((previous&&previous.judgment_id!==judgmentId)||(byJudgment&&byJudgment.source_path!==sourcePath))throw Error('Conflicting document identity');
      if(previous?.judgment_id===judgmentId&&previous.source_checksum===digest&&previous.parser_version===PARSER_VERSION)pending.push({sourcePath,checksum:digest,status:'unchanged'});
      else{const data=JSON.parse(await readFile(file,'utf8'));const invalid=validateShape(data,identity.language);if(invalid)throw Error(invalid);const html=data.html??data.content??data.judgment??data.text;const parsed=parseJudgment(html);batch.push({sourcePath,checksum:digest,judgmentId,html,parsed});bytes+=Buffer.byteLength(html)+Buffer.byteLength(JSON.stringify(parsed));}
     }

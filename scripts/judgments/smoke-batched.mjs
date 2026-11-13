@@ -18,5 +18,7 @@ try{
  await client.query('DROP TRIGGER fast_smoke_fail ON judgment_paragraphs');await client.query('DROP FUNCTION fast_smoke_fail()');
  const second=await importCorpus(config);assert.equal(second.outcomes.filter(r=>r.status==='imported').length,1);assert.equal(second.outcomes.filter(r=>r.status==='unchanged').length,1);
  const dry=await importCorpus({...config,apply:false});assert(dry.outcomes.every(r=>r.status==='unchanged'));
+ await client.query("UPDATE judgment_documents SET source_path='other/path/EN.json' WHERE judgment_id=5");
+ const conflict=await importCorpus({...config,apply:false});assert(conflict.outcomes.some(r=>r.status==='quarantined'&&r.error==='Conflicting document identity'));assert(!conflict.outcomes.some(r=>r.sourcePath==='HKCA/2020/3/EN.json'&&r.status==='would-import'));
  console.log(JSON.stringify({passed:true,batchRollbackAndIsolation:true,failedRowResumable:true,dryRun:true,providerCalls:0}));
 }finally{await client.query('DROP TRIGGER IF EXISTS fast_smoke_fail ON judgment_paragraphs').catch(()=>{});await client.query('DROP FUNCTION IF EXISTS fast_smoke_fail()').catch(()=>{});await client.end();await fs.rm(root,{recursive:true,force:true});}
