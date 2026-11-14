@@ -50,9 +50,11 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
  ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
- return _schema.array(hitSchema).parse(rows).map(hit => ({
- ...hit, url: hit.url && hit.sourceAnchor ? hit.url.split("#")[0] + "#" + hit.sourceAnchor.replace(/^#/, "") : hit.url,
- }));
+ return _schema.array(hitSchema).parse(rows).map(hit => {
+ const url=hit.url?new URL(hit.url,"https://hklii.hk"):null;
+ if(url && hit.sourceAnchor)url.hash=hit.sourceAnchor.replace(/^#/, "");
+ return {...hit,url:url?.href??null};
+ });
 }
 const paragraphSchema = _schema.object({ id:_schema.string(), position:_schema.number(), label:_schema.string().nullable(), anchor:_schema.string().nullable(), block_type:_schema.string(), content:_schema.string(), truncated:_schema.boolean().optional() });
 const occurrenceSchema=_schema.object({id:_schema.string(),reference_id:_schema.string(),evidence_key:_schema.string(),paragraph_id:_schema.string().nullable(),anchor:_schema.string().nullable(),evidence:_schema.record(_schema.string(),_schema.unknown())});
@@ -74,6 +76,7 @@ export async function getFulltext(id:number,start:number,end:number,direction:"i
  'SELECT d.id::text,d.judgment_id,d.generation::text,d.source_path,d.parser_version,j.url,j."neutralCitation" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id WHERE d.judgment_id=$1',id));
  const document=documents[0];
  if(!document) throw new Error("Judgment document not found");
+ document.url=new URL(document.url,"https://hklii.hk").href;
  const rows=_schema.array(paragraphSchema).parse(await prisma.$queryRawUnsafe<unknown>(
  'SELECT id::text,position,label,anchor,block_type,left(content,30000) AS content,length(content)>30000 AS truncated FROM judgment_paragraphs WHERE document_id=$1::bigint AND position BETWEEN $2 AND $3 ORDER BY position LIMIT 100',document.id,start,end));
  let remaining=30000;

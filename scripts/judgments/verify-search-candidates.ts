@@ -16,8 +16,8 @@ async function main(){
   const config={client,root,databaseUrl,apply:true,testDatabase:true,fast:true,onProgress:undefined};await importCorpus(config);await generateChunks({client,apply:true,fast:true});
   const vector=[1,...Array(3071).fill(0)];await client.query("UPDATE judgment_fulltext_chunks SET embedding=$1::halfvec,status='ready' WHERE judgment_id=6",[JSON.stringify(vector)]);
   for(const embedding of [null,vector]){
-   const hits=await searchFulltext('boundarymarker',cjkTokens('boundarymarker'),embedding,['en']);const hit=hits.find(h=>h.judgmentId===6);assert(hit?.documentId);assert.equal(hit.sourceAnchor,'p1');
-   const doc=await getFulltext(6,hit.startPosition??0,hit.endPosition??0,'none',20);assert(doc.paragraphs.some(p=>p.content.includes('Boundarymarker original judgment passage.')));
+   const hits=await searchFulltext('boundarymarker',cjkTokens('boundarymarker'),embedding,['en']);const hit=hits.find(h=>h.judgmentId===6);assert(hit?.documentId);assert.equal(hit.sourceAnchor,'p1');assert.equal(new URL(hit.url??'').origin,'https://hklii.hk');
+   const doc=await getFulltext(6,hit.startPosition??0,hit.endPosition??0,'none',20);assert.equal(new URL(doc.document.url).origin,'https://hklii.hk');assert(doc.paragraphs.some(p=>p.content.includes('Boundarymarker original judgment passage.')));
   }
   assert.equal((await searchFulltext('boundarymarker','boundarymarker',null,['tc'])).length,0);
   await fs.writeFile(source,JSON.stringify({content:'<p>Replacement with no old marker.</p>'}));await importCorpus(config);
