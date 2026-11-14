@@ -61,7 +61,7 @@ const occurrenceSchema=_schema.object({id:_schema.string(),reference_id:_schema.
 const legislationSchema=_schema.object({id:_schema.string(),source_id:_schema.number(),original:_schema.string(),status:_schema.string(),cap_id:_schema.number().nullable(),section_id:_schema.number().nullable(),capNumber:_schema.string().nullable(),sectionNumber:_schema.string().nullable(),targetUrl:_schema.string().nullable(),heading:_schema.string().nullable(),provenance:_schema.record(_schema.string(),_schema.unknown())});
 export const documentOutputSchema = _schema.object({
  cases:_schema.array(_schema.object({caseAct:_schema.string(),title:_schema.string(),judgments:_schema.array(_schema.object({id:_schema.number(),chunk_no:_schema.literal(0),neutralCitation:_schema.string(),courtName:_schema.string(),year:_schema.number(),date:_schema.string(),url:_schema.string(),summary:_schema.string().nullable()}))})),
- document: _schema.object({id:_schema.string(), judgment_id:_schema.number(), generation:_schema.string(), source_path:_schema.string(), parser_version:_schema.string(),url:_schema.string(),neutralCitation:_schema.string()}),
+ document: _schema.object({id:_schema.string(), judgment_id:_schema.number(), generation:_schema.string(), source_path:_schema.string(), parser_version:_schema.string(),url:_schema.string(),neutralCitation:_schema.string(),languageCode:_schema.string()}),
  paragraphs:_schema.array(paragraphSchema),
  references:_schema.array(_schema.object({id:_schema.string(),source_id:_schema.number(),target_id:_schema.number().nullable(),kind:_schema.string(),original:_schema.string(),normalized:_schema.string(),status:_schema.string()})),
  occurrences:_schema.array(occurrenceSchema),
@@ -71,14 +71,17 @@ export const documentOutputSchema = _schema.object({
  truncated:_schema.boolean(),
 });
 /** Return bounded source paragraphs and independently paginated reference directions for one judgment. */
-export async function getFulltext(id:number,start:number,end:number,direction:"incoming"|"outgoing"|"both"|"none",limit:number,referenceAfter="0",legislationAfter="0") {
+export async function getFulltext(id:number,start:number,end:number,direction:"incoming"|"outgoing"|"both"|"none",limit:number,referenceAfter="0",legislationAfter="0",selection:{paragraphLabel?:string;languageCode?:"en"|"tc"|"sc"}={}) {
  const documents = _schema.array(documentOutputSchema.shape.document).parse(await prisma.$queryRawUnsafe<unknown>(
- 'SELECT d.id::text,d.judgment_id,d.generation::text,d.source_path,d.parser_version,j.url,j."neutralCitation" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id WHERE d.judgment_id=$1',id));
+ `SELECT d.id::text,d.judgment_id,d.generation::text,d.source_path,d.parser_version,j.url,j."neutralCitation",j."languageCode" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id
+ WHERE ($2::text IS NULL AND j.id=$1) OR ($2::text IS NOT NULL AND lower(j."languageCode")=$2 AND EXISTS(SELECT 1 FROM "Judgment" original WHERE original.id=$1 AND upper(original."courtName")=upper(j."courtName") AND original.year=j.year AND original.number=j.number))`,id,selection.languageCode??null));
+ if(documents.length>1)throw new Error("Requested judgment language is ambiguous");
  const document=documents[0];
- if(!document) throw new Error("Judgment document not found");
+ if(!document) throw new Error("Judgment document or requested language not found");
  document.url=new URL(document.url,"https://hklii.hk").href;
  const rows=_schema.array(paragraphSchema).parse(await prisma.$queryRawUnsafe<unknown>(
- 'SELECT id::text,position,label,anchor,block_type,left(content,30000) AS content,length(content)>30000 AS truncated FROM judgment_paragraphs WHERE document_id=$1::bigint AND position BETWEEN $2 AND $3 ORDER BY position LIMIT 100',document.id,start,end));
+ 'SELECT id::text,position,label,anchor,block_type,left(content,30000) AS content,length(content)>30000 AS truncated FROM judgment_paragraphs WHERE document_id=$1::bigint AND (($4::text IS NOT NULL AND label=$4) OR ($4::text IS NULL AND position BETWEEN $2 AND $3)) ORDER BY position LIMIT 100',document.id,start,end,selection.paragraphLabel??null));
+ if(selection.paragraphLabel && !rows.length)throw new Error('Requested printed paragraph label is not present in this source');
  let remaining=30000;
  const paragraphs: _schema.infer<typeof paragraphSchema>[]=[];
  for(const row of rows) {
@@ -91,7 +94,7 @@ export async function getFulltext(id:number,start:number,end:number,direction:"i
  `SELECT r.id::text,r.source_id,r.target_id,r.kind,r.original,r.normalized,r.status FROM judgment_references r
  JOIN judgment_documents d ON d.judgment_id=r.source_id AND r.provenance->>'generation'=d.generation::text WHERE
  r.id>$4::bigint AND (status<>'self') AND (($2 IN ('outgoing','both') AND source_id=$1) OR ($2 IN ('incoming','both') AND target_id=$1 AND status='resolved'))
- ORDER BY r.id LIMIT $3`,id,direction,limit+1,referenceAfter));
+ ORDER BY r.id LIMIT $3`,document.judgment_id,direction,limit+1,referenceAfter));
  const references=referenceRows.slice(0,limit);
  const occurrences=references.length?_schema.array(occurrenceSchema).parse(await prisma.$queryRawUnsafe<unknown>(
  `SELECT id::text,reference_id::text,evidence_key,paragraph_id::text,anchor,evidence FROM (
@@ -103,7 +106,7 @@ export async function getFulltext(id:number,start:number,end:number,direction:"i
  coalesce(section.url,cap.url) AS "targetUrl",coalesce(section."sectionHeading",cap.title) AS heading
  FROM judgment_legislation_references r JOIN judgment_documents d ON d.judgment_id=r.source_id AND r.provenance->>'generation'=d.generation::text
  LEFT JOIN "LegislationCap" cap ON cap.id=r.cap_id LEFT JOIN "LegislationSection" section ON section.id=r.section_id
- WHERE r.source_id=$1 AND r.id>$3::bigint ORDER BY r.id LIMIT $2`,id,limit+1,legislationAfter));
+ WHERE r.source_id=$1 AND r.id>$3::bigint ORDER BY r.id LIMIT $2`,document.judgment_id,limit+1,legislationAfter));
  const legislation=legislationRows.slice(0,limit);
  return {cases:[],document,paragraphs,references,occurrences,legislation,nextReferenceId:referenceRows.length>limit ? references.at(-1)?.id??null : null,nextLegislationId:legislationRows.length>limit ? legislation.at(-1)?.id??null : null,truncated:paragraphs.length<rows.length || paragraphs.some(paragraph=>paragraph.truncated)};
 }

@@ -22,6 +22,9 @@ async function main(){
   assert.equal((await searchFulltext('boundarymarker','boundarymarker',null,['tc'])).length,0);
   await fs.writeFile(source,JSON.stringify({content:'<p>Replacement with no old marker.</p>'}));await importCorpus(config);
   assert(!(await searchFulltext('boundarymarker','boundarymarker',vector,['en'])).some(h=>h.judgmentId===6));
+  const chinese=await getFulltext(1,999,999,'none',20,'0','0',{paragraphLabel:'1',languageCode:'tc'});assert.equal(chinese.document.judgment_id,3);assert.equal(chinese.document.languageCode,'tc');assert(chinese.paragraphs.length>0&&chinese.paragraphs.every(p=>p.label==='1'));assert(chinese.paragraphs.some(p=>p.content.includes('業主')));
+  await assert.rejects(getFulltext(1,0,99,'none',20,'0','0',{paragraphLabel:'999',languageCode:'tc'}),/printed paragraph label/);
+  await assert.rejects(getFulltext(1,0,99,'none',20,'0','0',{paragraphLabel:'1',languageCode:'sc'}),/requested language/);
   console.log(JSON.stringify({passed:true,lexicalAndVectorCandidates:true,sourceAnchor:true,originalParagraph:true,languageFilter:true,staleGenerationExcluded:true,providerCalls:0}));
  }finally{await client.end();await prisma.$disconnect();await fs.rm(root,{recursive:true,force:true});}
 }

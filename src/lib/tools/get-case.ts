@@ -6,8 +6,10 @@ import { TOOL_TIMEOUT_MS, withTimeout, withToolSpan, errorPayloadSchema } from "
 
 const getCaseInput = z.object({
  judgment_id:z.number().int().positive().optional(),
- start_position:z.number().int().min(0).optional(),
- end_position:z.number().int().min(0).optional(),
+ paragraph_label:z.string().regex(/^\d+[A-Za-z]?$/).optional().describe("Exact paragraph number printed in the judgment, e.g. 26. Use this for a requested paragraph number; internal positions are NOT paragraph numbers."),
+ language_code:z.enum(["en","tc","sc"]).optional().describe("Requested original language: tc for traditional Chinese, sc for simplified Chinese, en for English. Selects the matching judgment language; never translate text and call it an original quotation."),
+ start_position:z.number().int().min(0).optional().describe("Zero-based content block index, NOT the printed paragraph number."),
+ end_position:z.number().int().min(0).optional().describe("Inclusive zero-based block index. At most 100 blocks, e.g. 0 through 99."),
  reference_direction:z.enum(["incoming","outgoing","both","none"]).default("none"),
  reference_limit:z.number().int().min(1).max(100).default(20),
  reference_after:z.string().regex(/^\d{1,18}$/).optional().describe("Continue references after the previous nextReferenceId."),
@@ -46,7 +48,7 @@ export type CaseToolOutput = z.infer<typeof caseToolOutputSchema>;
  */
 export const getCaseTool = tool({
 	description:
-		"Fetch a Hong Kong case by action number or party-name fragment with linked judgment summaries. When full-text retrieval is enabled, pass judgment_id and a bounded zero-based start_position/end_position range to fetch original paragraphs and optional incoming/outgoing references. Large responses explicitly report truncation; use narrower ranges or search passages for more context.",
+		"Fetch a Hong Kong case by action number or party-name fragment with linked judgment summaries. When full-text retrieval is enabled, use judgment_id, language_code and paragraph_label to fetch a requested printed paragraph in its original language. For exploratory reading, pass judgment_id and a bounded zero-based start_position/end_position range to fetch original paragraphs and optional incoming/outgoing references. Large responses explicitly report truncation; use narrower ranges or search passages for more context.",
 	inputSchema: getCaseInput,
 	outputSchema: caseToolOutputSchema,
 	execute: async (args: GetCaseInput): Promise<CaseToolOutput> => {
@@ -55,8 +57,8 @@ export const getCaseTool = tool({
 				withToolSpan("tool:get_case", args, async () => {
 					if(args.judgment_id !== undefined) {
  if(!fulltextEnabled()) return {error:"Judgment full text is disabled"};
- if(args.start_position===undefined || args.end_position===undefined || args.end_position<args.start_position || args.end_position-args.start_position>=100) return {error:"Provide a bounded start_position/end_position range of at most 100 paragraphs"};
- return getFulltext(args.judgment_id,args.start_position,args.end_position,args.reference_direction,args.reference_limit,args.reference_after,args.legislation_after);
+ if(!args.paragraph_label && (args.start_position===undefined || args.end_position===undefined || args.end_position<args.start_position || args.end_position-args.start_position>=100)) return {error:"Provide a bounded start_position/end_position range of at most 100 paragraphs"};
+ return getFulltext(args.judgment_id,args.start_position??0,args.end_position??99,args.reference_direction,args.reference_limit,args.reference_after,args.legislation_after,{paragraphLabel:args.paragraph_label,languageCode:args.language_code});
  }
  if (!args.action_no?.trim() && !args.case_name?.trim()) {
 						return { error: "get_case: provide at least one of action_no or case_name" };
