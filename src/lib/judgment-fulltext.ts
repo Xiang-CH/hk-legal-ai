@@ -34,7 +34,7 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  ), vec AS (
  SELECT id, embedding <=> $3::halfvec AS distance FROM current WHERE embedding IS NOT NULL AND status='ready' AND $3::halfvec IS NOT NULL
  AND model='text-embedding-3-large' AND deployment=$5 AND model_version=$6
- ORDER BY embedding <=> $3::halfvec,id LIMIT 15
+ ORDER BY embedding <=> $3::halfvec LIMIT 15
  ), vr AS (SELECT *,row_number() OVER(ORDER BY distance,id) AS rank FROM vec)
  SELECT c.judgment_id AS "judgmentId",c.chunk_no,c.content,left(c.content,600) AS snippet,
  c.neutral_citation AS "neutralCitation",c.court_name AS "courtName",c.year,to_char(c.date AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS date,c.parties,
@@ -45,8 +45,10 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  c.start_position AS "startPosition",c.end_position AS "endPosition",
  c.start_offset AS "startOffset",c.end_offset AS "endOffset",c.spans,
  jsonb_path_query_first(c.spans,'$[*] ? (@.anchor != null)')->>'anchor' AS "sourceAnchor"
- FROM current c LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
- WHERE lex.id IS NOT NULL OR vr.id IS NOT NULL ORDER BY rrf_score DESC,c.id LIMIT 30
+ FROM (SELECT id FROM lex UNION SELECT id FROM vr) candidates
+ JOIN current c ON c.id=candidates.id
+ LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
+ ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
  return _schema.array(hitSchema).parse(rows).map(hit => ({
  ...hit, url: hit.url && hit.sourceAnchor ? hit.url.split("#")[0] + "#" + hit.sourceAnchor.replace(/^#/, "") : hit.url,
