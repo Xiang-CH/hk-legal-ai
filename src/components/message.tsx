@@ -30,10 +30,12 @@ const toolLabels = {
   "tool-ask_question": "Clarifying question",
 } satisfies Record<ChatToolPart["type"], string>;
 
+/** Narrow a message part to the interactive question tool variant. */
 function isAskQuestionPart(part: MessagePart): part is AskQuestionPart {
   return part.type === "tool-ask_question";
 }
 
+/** Recognize the supported retrieval tool parts used by progress rendering. */
 function isChatToolPart(part: MessagePart): part is ChatToolPart {
   return (
     part.type === "tool-search_clic" ||
@@ -45,16 +47,19 @@ function isChatToolPart(part: MessagePart): part is ChatToolPart {
   );
 }
 
+/** Validate object-shaped tool data before reading unknown output fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** Read object-shaped tool input without assuming fields from an external message. */
 function toolInput(part: ChatToolPart): Record<string, unknown> | null {
   if (!("input" in part)) return null;
   const input: unknown = (part as { input?: unknown }).input;
   return isRecord(input) ? input : null;
 }
 
+/** Extract a nonempty string field from validated tool input. */
 function stringField(input: Record<string, unknown> | null, key: string): string | null {
   if (!input) return null;
   const value = input[key];
@@ -105,6 +110,7 @@ function toolInputSummary(part: ChatToolPart): string | null {
   }
 }
 
+/** Count recognized result arrays while leaving unknown output shapes uncounted. */
 function toolResultCount(part: ChatToolPart): number | null {
   if (part.state !== "output-available") return null;
   const output: unknown = part.output;
@@ -120,6 +126,7 @@ function toolResultCount(part: ChatToolPart): number | null {
   return null;
 }
 
+/** Map streaming tool states to a visible label plus pending/failure indicators. */
 function toolState(part: ChatToolPart): { label: string; pending: boolean; failed: boolean } {
   switch (part.state) {
     case "input-streaming":
@@ -152,6 +159,7 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
   }
 }
 
+/** Render one bounded progress row with its query, completion status and available result count. */
 function ToolProgress({ part }: { part: ChatToolPart }) {
   const state = toolState(part);
   const keywords = toolInputSummary(part);
@@ -181,6 +189,37 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
   );
 }
 
+/** Collapse long tool groups to three recent steps, retaining pending work and an expandable failure summary. */
+function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
+  const [open, setOpen] = React.useState(false);
+  const completed = parts.filter((part) => part.state === "output-available").length;
+  const failed = parts.filter((part) => toolState(part).failed).length;
+  const previewParts = [
+    ...parts.filter((part) => !toolState(part).pending),
+    ...parts.filter((part) => toolState(part).pending),
+  ].slice(-3);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="min-w-0 rounded-xl border border-border/70 px-3 py-2">
+      <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 text-left text-xs text-muted-foreground">
+        <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", !open && "-rotate-90")} />
+        <span className="min-w-0 flex-1">
+          Search progress: {completed}/{parts.length} completed{failed > 0 && ` · ${failed} failed`}
+        </span>
+        <span className="shrink-0">{open ? "Hide details" : "Show details"}</span>
+      </CollapsibleTrigger>
+      {!open && (
+        <div className="mt-2 space-y-2">
+          {previewParts.map((part) => <ToolProgress key={part.toolCallId} part={part} />)}
+        </div>
+      )}
+      <CollapsibleContent className="max-h-64 space-y-2 overflow-y-auto pt-3">
+        {parts.map((part) => <ToolProgress key={part.toolCallId} part={part} />)}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** Render reasoning in an accessible disclosure with the current streaming state. */
 function ReasoningCard({ text, isStreaming }: { text: string; isStreaming: boolean }) {
   // Collapsed by default; stay open while streaming so live thinking is visible.
   const [expanded, setExpanded] = React.useState(false);
@@ -256,6 +295,7 @@ const PreviewMessage = React.forwardRef<
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
   const completedToolCount = toolParts.filter((part) => part.state === "output-available").length;
+  const collapseToolProgress = toolParts.length > 4;
 
   if (message.role === "user" && !hasTextContent) return null;
   if (
@@ -296,7 +336,7 @@ const PreviewMessage = React.forwardRef<
         )}
       >
         {message.role === "assistant" && (textContent || hasReasoningContent || toolParts.length > 0) && (
-          <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
+          <div className="hidden size-8 items-center rounded-full justify-center ring-1 shrink-0 ring-border md:flex">
             <SparklesIcon size={14} />
           </div>
         )}
@@ -333,6 +373,11 @@ const PreviewMessage = React.forwardRef<
               }
 
               if (isChatToolPart(part)) {
+                if (collapseToolProgress) {
+                  return part.toolCallId === toolParts[0]?.toolCallId
+                    ? <SearchProgress key="search-progress" parts={toolParts} />
+                    : null;
+                }
                 return <ToolProgress key={part.toolCallId} part={part} />;
               }
 
@@ -355,7 +400,7 @@ const PreviewMessage = React.forwardRef<
               return null;
             })}
 
-          {message.role === "assistant" && toolParts.length > 0 && (
+          {message.role === "assistant" && toolParts.length > 0 && !collapseToolProgress && (
             <div className="text-xs text-muted-foreground">
               Search progress: {completedToolCount}/{toolParts.length} completed
             </div>
@@ -436,7 +481,7 @@ export const ThinkingMessage = ({
           }
         )}
       >
-        <div className="size-8 flex items-center rounded-full justify-center ring-1 shrink-0 ring-border">
+        <div className="hidden size-8 items-center rounded-full justify-center ring-1 shrink-0 ring-border md:flex">
           <SparklesIcon size={14} />
         </div>
 

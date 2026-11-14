@@ -1,5 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
+import { sourceFields } from "@/lib/judgment-fulltext";
 import { prisma } from "@/lib/prisma";
 import {
 	searchClicChunks,
@@ -54,6 +55,7 @@ const fullSearchClicResultSchema = z.strictObject({
 });
 
 const fullSearchJudgmentResultSchema = z.strictObject({
+	...sourceFields,
 	kind: z.literal("judgment"),
 	judgmentId: z.number(),
 	chunk_no: z.number(),
@@ -146,7 +148,7 @@ export const fullSearchTool = tool({
 						mergeBestRrf(clicLists, (h) => `${h.nid}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
 					);
 					const judgmentMerged = topByRrf(
-						mergeBestRrf(judgmentLists, (h) => `${h.judgmentId}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
+						mergeBestRrf(judgmentLists, (hit) => `${hit.judgmentId}:${hit.documentId ?? "summary"}:${hit.chunk_no}`, (hit) => hit.rrf_score ?? 0),
 					);
 
 					// 3. Legislation graph walk from the merged CLIC nids (mirror of the legacy route).
@@ -310,6 +312,7 @@ export const fullSearchTool = tool({
 								const caseSummary = casesByJudgmentId.get(item.hit.judgmentId);
 								return {
 									kind: "judgment",
+									...Object.fromEntries(Object.keys(sourceFields).map(key => [key, Reflect.get(item.hit,key)])),
 									judgmentId: item.hit.judgmentId,
 									chunk_no: item.hit.chunk_no,
 									neutralCitation: item.hit.neutralCitation,

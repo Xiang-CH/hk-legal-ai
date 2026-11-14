@@ -90,6 +90,7 @@ function source({
   };
 }
 
+/** Validate supported tool outputs and map citation metadata, including full-text paragraph ranges, to source seeds. */
 export function mapToolOutputToSources(toolName: SearchToolName, output: unknown): SourceSeed[] {
   switch (toolName) {
     case "search_clic": {
@@ -113,7 +114,7 @@ export function mapToolOutputToSources(toolName: SearchToolName, output: unknown
       return parsed.data.results.flatMap((item) => {
         if (!item.url) return [];
         const mapped = source({
-          sourceId: `judgment-${item.judgmentId}-${item.chunk_no}`,
+          sourceId: `judgment-${item.judgmentId}-${item.documentId ? `${item.documentId}-` : ""}${item.chunk_no}`,
           url: item.url,
           title: item.neutralCitation ?? item.courtName ?? `Judgment ${item.judgmentId}`,
           rrfScore: item.rrf_score,
@@ -161,7 +162,7 @@ export function mapToolOutputToSources(toolName: SearchToolName, output: unknown
         } else if (item.kind === "judgment") {
           if (!item.url) continue;
           seed = source({
-            sourceId: `judgment-${item.judgmentId}-${item.chunk_no}`,
+            sourceId: `judgment-${item.judgmentId}-${item.documentId ? `${item.documentId}-` : ""}${item.chunk_no}`,
             url: item.url,
             title: item.neutralCitation ?? item.courtName ?? `Judgment ${item.judgmentId}`,
             rrfScore: item.rrf_score,
@@ -203,6 +204,20 @@ export function mapToolOutputToSources(toolName: SearchToolName, output: unknown
     case "get_case": {
       const parsed = caseToolOutputSchema.safeParse(output);
       if (!parsed.success || "error" in parsed.data) return [];
+      if ("document" in parsed.data) {
+        const document = parsed.data.document;
+        const paragraph = parsed.data.paragraphs.find(item => item.anchor) ?? parsed.data.paragraphs[0];
+        const mapped = source({
+          sourceId: `judgment-${document.judgment_id}-${document.id}-${paragraph?.position ?? 0}`,
+          url: paragraph?.anchor ? `${document.url.split("#")[0]}#${paragraph.anchor}` : document.url,
+          title: document.neutralCitation,
+          rrfScore: null,
+          rerankScore: null,
+          snippet: paragraph?.content.slice(0,240) ?? document.neutralCitation,
+          baseUrl: "https://hklii.hk",
+        });
+        return mapped ? [mapped] : [];
+      }
       return parsed.data.cases.flatMap((item) =>
         item.judgments.flatMap((judgment) => {
           const mapped = source({
