@@ -60,10 +60,11 @@ if(options.phase==='migrate'){
    }
    console.log(JSON.stringify({phase:'chunks',total}));
   }else if(options.phase==='embed'){
+   if(options.apply && !(await client.query("SELECT pg_try_advisory_lock(hashtextextended('clic:judgment-embedding-run',0)) AS acquired")).rows[0].acquired)throw Error('Another embedding process already owns this database');
    const total={ready:0,failed:0,requests:0,tokens:0};
    for(;;){
     const budgetFile=options['budget-file'];
-    const result=await embedPending({client,apply:options.apply,embed:(inputs,config)=>azureEmbed(inputs,{...config,onUsage:usage=>recordProviderUsage(budgetFile,usage.usage.total_tokens)}),beforeRequest:options.apply?request=>reserveBudgetTokens(budgetFile,{tokens:request.tokens,scope:options['budget-scope'],purpose:'judgment-embedding'}):undefined,limit,batchSize,approveCost:options['approve-cost'],maxTokens:maxTokens-total.tokens});
+    const result=await embedPending({client,apply:options.apply,embed:(inputs,config)=>azureEmbed(inputs,{...config,onUsage:usage=>recordProviderUsage(budgetFile,usage.usage.total_tokens)}),concurrency:Number(options.concurrency),beforeRequest:options.apply?request=>reserveBudgetTokens(budgetFile,{tokens:request.tokens,scope:options['budget-scope'],purpose:'judgment-embedding'}):undefined,limit,batchSize,approveCost:options['approve-cost'],maxTokens:maxTokens-total.tokens});
     if(!options.apply){console.log(JSON.stringify(result));break;}
     for(const key of ['ready','failed','requests','tokens'])total[key]+=result[key]??0;
     console.log(JSON.stringify({phase:'embed',...result}));

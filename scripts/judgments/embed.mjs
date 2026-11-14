@@ -3,22 +3,26 @@ import { verifyWriteAccess } from './db.mjs';
 import { getEncoding } from 'js-tiktoken';
 const billingTokenizer=getEncoding('cl100k_base');
 /** Embed a bounded pending batch under an explicit token budget, caching identical inputs and persisting retries without activating stale generations. */
-export async function embedPending({client,embed,batchSize=8,limit=100,apply=false,approveCost=false,maxTokens=0,retries=3,testProvider=false,beforeRequest}) {
+export async function embedPending({client,embed,batchSize=8,limit=100,apply=false,approveCost=false,maxTokens=0,retries=3,testProvider=false,beforeRequest,concurrency=1}) {
+ if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>8)throw Error('Concurrency must be 1..8');
  if(!Number.isInteger(batchSize)||batchSize<1||!Number.isInteger(limit)||limit<1||!Number.isInteger(retries)||retries<0) throw Error('Invalid bounds');
  if(testProvider && process.env.NODE_ENV==='production') throw Error('Test provider prohibited in production');
- const {rows}=await client.query(`SELECT c.* FROM judgment_fulltext_chunks c JOIN judgment_documents d ON d.id=c.document_id AND d.generation::text=c.document_generation JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation WHERE c.status<>'ready' ORDER BY c.id LIMIT $1`,[limit]);
+ let queryTail=Promise.resolve();
+ const query=(...args)=>{const result=queryTail.then(()=>client.query(...args));queryTail=result.catch(()=>{});return result;};
+ const {rows}=await query(`SELECT c.* FROM judgment_fulltext_chunks c JOIN judgment_documents d ON d.id=c.document_id AND d.generation::text=c.document_generation JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation WHERE c.status<>'ready' ORDER BY c.id LIMIT $1`,[limit]);
  const tokenCost=row=>billingTokenizer.encode(row.embedding_input).length;
  const estimate=rows.reduce((sum,row)=>sum+tokenCost(row),0); if(!apply) return {pending:rows.length,tokens:estimate};
  if(!approveCost||!Number.isSafeInteger(maxTokens)||maxTokens<=0) throw Error('Explicit cost approval and positive token ceiling required');
- let spent=0,ready=0,requests=0,failed=0;
+ let spent=0,ready=0,requests=0,failed=0,budgetExhausted=false,stopped=false,fatal;
  const save=async(items,attempts=1)=>{
   if(!items.length)return;
-  await client.query(`UPDATE judgment_fulltext_chunks c SET embedding=v.embedding::halfvec,status='ready',error=NULL,attempts=c.attempts+$2
+  await query(`UPDATE judgment_fulltext_chunks c SET embedding=v.embedding::halfvec,status='ready',error=NULL,attempts=c.attempts+$2
    FROM jsonb_to_recordset($1::jsonb) AS v(id bigint,embedding text) WHERE c.id=v.id`,[JSON.stringify(items.map(({row,vector})=>({id:row.id,embedding:typeof vector==='string'?vector:JSON.stringify(vector)}))),attempts]);ready+=items.length;
  };
- for(let offset=0;offset<rows.length;offset+=batchSize) {
+ async function processBatch(offset) {
+  if(stopped)return;
   const batch=rows.slice(offset,offset+batchSize);
-  const cached=(await client.query(`SELECT DISTINCT ON (r.id) r.id,c.embedding::text AS embedding
+  const cached=(await query(`SELECT DISTINCT ON (r.id) r.id,c.embedding::text AS embedding
    FROM jsonb_to_recordset($1::jsonb) AS r(id bigint,input_checksum text,embedding_input text,model text,deployment text,model_version text)
    JOIN judgment_fulltext_chunks c ON c.input_checksum=r.input_checksum AND c.embedding_input=r.embedding_input AND c.model=r.model AND c.deployment=r.deployment AND c.model_version=r.model_version
    WHERE c.status='ready' AND c.embedding IS NOT NULL ORDER BY r.id,c.id`,[JSON.stringify(batch.map(({id,input_checksum,embedding_input,model,deployment,model_version})=>({id,input_checksum,embedding_input,model,deployment,model_version})))])).rows;
@@ -33,26 +37,31 @@ export async function embedPending({client,embed,batchSize=8,limit=100,apply=fal
    try {
     let vectors;
     for(;;) {
-     if(spent+cost>maxTokens)return {ready,failed,requests,tokens:spent,budgetExhausted:true};
+     if(stopped)return;
+     if(spent+cost>maxTokens){budgetExhausted=true;stopped=true;return;}
+     // Claim the local token allowance synchronously before any worker can await.
+     spent+=cost;
      if(beforeRequest){
       try{await beforeRequest({tokens:cost,model:group[0].model,deployment:group[0].deployment,version:group[0].model_version});}
-      catch(error){if(error.code==='EMBEDDING_BUDGET_EXHAUSTED')return {ready,failed,requests,tokens:spent,budgetExhausted:true};throw error;}
+      catch(error){spent-=cost;if(error.code==='EMBEDDING_BUDGET_EXHAUSTED'){budgetExhausted=true;stopped=true;return;}throw error;}
      }
-     spent+=cost;requests++;attempts++;
+     requests++;attempts++;
      try {
       vectors=await embed(group.map(row=>row.embedding_input),{model:group[0].model,deployment:group[0].deployment,version:group[0].model_version});
       if(!Array.isArray(vectors)||vectors.length!==group.length||vectors.some(vector=>!Array.isArray(vector)||vector.length!==3072||!vector.every(Number.isFinite)||!vector.some(value=>value!==0)))throw Error('Expected one nonzero 3072-dimensional vector per input');
       break;
      }catch(error){if(attempts>retries||['EMBEDDING_BUDGET_ACCOUNTING_FAILED','UNEXPECTED_EMBEDDING_MODEL'].includes(error.code))throw error;await new Promise(resolve=>setTimeout(resolve,Math.min(1000*2**(attempts-1),10000)));}
     }
-    const beforeSave=ready;
-    await client.query('BEGIN');
-    try{await save(group.map((row,index)=>({row,vector:vectors[index]})),attempts);await client.query('COMMIT');}
-    catch(error){await client.query('ROLLBACK');ready=beforeSave;throw error;}
-   }catch(error){if(['EMBEDDING_BUDGET_ACCOUNTING_FAILED','UNEXPECTED_EMBEDDING_MODEL'].includes(error.code))throw error;await client.query(`UPDATE judgment_fulltext_chunks SET status='failed',error=$2,attempts=attempts+$3 WHERE id=ANY($1::bigint[])`,[group.map(row=>row.id),String(error.message),attempts]);failed+=group.length;}
+    // One UPDATE is atomic; no shared multi-statement transaction across workers.
+    await save(group.map((row,index)=>({row,vector:vectors[index]})),attempts);
+   }catch(error){if(['EMBEDDING_BUDGET_ACCOUNTING_FAILED','UNEXPECTED_EMBEDDING_MODEL'].includes(error.code))throw error;await query(`UPDATE judgment_fulltext_chunks SET status='failed',error=$2,attempts=attempts+$3 WHERE id=ANY($1::bigint[])`,[group.map(row=>row.id),String(error.message),attempts]);failed+=group.length;}
   }
  }
- return {ready,failed,requests,tokens:spent};
+ let offset=0;
+ const worker=async()=>{try{while(!stopped&&offset<rows.length){const next=offset;offset+=batchSize;await processBatch(next);}}catch(error){fatal??=error;stopped=true;}};
+ await Promise.all(Array.from({length:Math.min(concurrency,Math.ceil(rows.length/batchSize))},worker));
+ if(fatal)throw fatal;
+ return {ready,failed,requests,tokens:spent,...(budgetExhausted?{budgetExhausted:true}:{})};
 }
 /** Call the configured Azure embedding deployment and validate response count/dimensions; report provider usage through the callback. */
 export async function azureEmbed(inputs,{deployment,onUsage}) {

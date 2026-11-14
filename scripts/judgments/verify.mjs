@@ -11,9 +11,14 @@ try {
  await client.query('BEGIN READ ONLY');
  const documents=(await client.query('SELECT id,generation FROM judgment_documents ORDER BY id')).rows;
  let blockCount=0,chunkCount=0,totalTokens=0,ready=0;
- for(const document of documents) {
-  const blocks=(await client.query('SELECT position,content FROM judgment_paragraphs WHERE document_id=$1 ORDER BY position',[document.id])).rows;
-  const chunks=(await client.query(`SELECT c.* FROM judgment_fulltext_chunks c JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation WHERE c.document_id=$1 AND c.document_generation=$2`,[document.id,String(document.generation)])).rows;
+ for(let offset=0;offset<documents.length;offset+=64){
+  const page=documents.slice(offset,offset+64),ids=page.map(d=>d.id);
+  const group=rows=>{const map=new Map();for(const row of rows){const k=String(row.document_id);const items=map.get(k)??[];items.push(row);map.set(k,items);}return map;};
+  const blockPage=group((await client.query('SELECT document_id,position,content FROM judgment_paragraphs WHERE document_id=ANY($1::bigint[]) ORDER BY document_id,position',[ids])).rows);
+  const chunkPage=group((await client.query(`SELECT c.document_id,c.document_generation,c.content,c.embedding_input,c.content_checksum,c.input_checksum,c.token_count,c.spans,c.status,c.embedding IS NOT NULL AS has_embedding FROM judgment_fulltext_chunks c JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation WHERE c.document_id=ANY($1::bigint[]) ORDER BY c.document_id,c.chunk_no`,[ids])).rows);
+ for(const document of page) {
+  const blocks=blockPage.get(String(document.id))??[];
+  const chunks=(chunkPage.get(String(document.id))??[]).filter(c=>c.document_generation===String(document.generation));
   assert(chunks.length,`Document ${document.id} has no active current chunks`);
   const source=new Map(blocks.map(block=>[block.position,block.content]));
   const coverage=new Map(blocks.map(block=>[block.position,[]]));
@@ -31,7 +36,7 @@ try {
     coverage.get(span.position).push([span.start,span.end]);
    }
    assert.equal(parts.join('\n'),chunk.content,'Stored chunk must exactly reconstruct from its source spans');
-   if(chunk.status==='ready'){assert(chunk.embedding!==null);ready++;}
+   if(chunk.status==='ready'){assert.equal(chunk.has_embedding,true);ready++;}
    if(requireVectors)assert.equal(chunk.status,'ready','Missing embedding');
    totalTokens+=chunk.token_count;chunkCount++;
   }
@@ -44,6 +49,7 @@ try {
    assert.equal(end,block.content.length,`Incomplete document ${document.id} block ${block.position}`);
    blockCount++;
   }
+ }
  }
  const graph=(await client.query(`SELECT
   (SELECT count(*)::int FROM judgment_references r LEFT JOIN judgment_documents d ON d.judgment_id=r.source_id WHERE d.id IS NULL OR r.provenance->>'generation' IS DISTINCT FROM d.generation::text) stale_case_references,
