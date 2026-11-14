@@ -1,8 +1,9 @@
 import {buildChunks,hash,cjk} from './chunks.mjs';
 /** Construct a bounded page from prefetched paragraphs, then atomically publish each page after generation checks. */
-export async function generateChunksBatched({client,limit=64,afterId=0,apply=false,...options}){
+export async function generateChunksBatched({client,limit=64,afterId=0,throughId=null,apply=false,...options}){
  if(!Number.isSafeInteger(limit)||limit<1||limit>128||!Number.isSafeInteger(afterId)||afterId<0)throw Error('Invalid chunk page bounds');
- const docs=(await client.query('SELECT d.id,d.judgment_id,d.generation,j."neutralCitation",j.parties,j."courtName",j.year,j.date::text AS date,j.url,j."languageCode" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id WHERE d.id>$1 ORDER BY d.id LIMIT $2',[afterId,limit])).rows;
+ if(throughId!==null&&(!Number.isSafeInteger(throughId)||throughId<=afterId))throw Error('Invalid chunk upper bound');
+ const docs=(await client.query('SELECT d.id,d.judgment_id,d.generation,j."neutralCitation",j.parties,j."courtName",j.year,j.date::text AS date,j.url,j."languageCode" FROM judgment_documents d JOIN "Judgment" j ON j.id=d.judgment_id WHERE d.id>$1 AND ($3::bigint IS NULL OR d.id<=$3) ORDER BY d.id LIMIT $2',[afterId,limit,throughId])).rows;
  if(!docs.length)return {documents:0,chunks:0,tokens:0,lastDocumentId:afterId};
  const byDoc=new Map();for(const row of (await client.query('SELECT * FROM judgment_paragraphs WHERE document_id=ANY($1::bigint[]) ORDER BY document_id,position',[docs.map(d=>d.id)])).rows){const k=String(row.document_id);const rows=byDoc.get(k)??[];rows.push(row);byDoc.set(k,rows);}
  let count=0,tokens=0;const active=[],rows=[];
