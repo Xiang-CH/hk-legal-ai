@@ -361,7 +361,10 @@ async function apply(db: pg.Client, job: Job, id: string) {
             `Page ${c.secondId}: unresolved CLIC link ${u.pathname}`,
           );
       }
-      if (/(^|\.)hklii\.hk$/.test(u.hostname)) {
+      if (
+        /(^|\.)hklii\.(hk|org)$/.test(u.hostname) &&
+        ["https:", "http:"].includes(u.protocol)
+      ) {
         const match = /\/(ord|reg|instrument)\/([^/]+)(?:\/([^/]+))?/.exec(
           u.pathname,
         );

@@ -798,3 +798,62 @@ test(
     assert.equal((await GET(request("?before=invalid"))).status, 400);
   },
 );
+
+test(
+  "updates rebuild existing HKLII legislation links for .org and .hk domains",
+  live,
+  async () => {
+    for (const host of [
+      "www.hklii.org",
+      "hklii.org",
+      "www.hklii.hk",
+      "hklii.hk",
+    ]) {
+      await seed();
+      await db.query('TRUNCATE "LegislationCap" CASCADE');
+      await db.query(
+        `INSERT INTO "LegislationCap" ("capNumber","languageCode",url,"updatedAt") VALUES ('480','en','https://www.hklii.hk/en/legis/ord/480',now()),('481','en','https://www.hklii.hk/en/legis/ord/481',now())`,
+      );
+      await db.query(
+        `INSERT INTO "LegislationSection" (path,"capNumber","sectionNumber",content,"languageCode",url) VALUES ('480/11','480','11','Section eleven','en','https://www.hklii.hk/en/legis/ord/480/s11'),('480/14','480','14','Section fourteen','en','https://www.hklii.hk/en/legis/ord/480/s14')`,
+      );
+      await db.query(
+        `INSERT INTO "_ClicPageToLegislationSection" ("A","B") SELECT p.id,s.id FROM "ClicPage" p CROSS JOIN "LegislationSection" s WHERE p.nid=10`,
+      );
+      await db.query(
+        `INSERT INTO "_ClicPageToLegislationCap" ("A","B") SELECT p.id,c.id FROM "ClicPage" p CROSS JOIN "LegislationCap" c WHERE p.nid=10 AND c."capNumber"='480'`,
+      );
+      const update = row(19, 10, "Updated legislation links");
+      update.html += `<a href="http://${host}/eng/hk/legis/ord/480/s11.html">Section 11</a><a href="https://${host}/en/legis/ord/480/s14">Section 14</a><a href="https://${host}/en/legis/ord/480/">Cap 480</a><a href="https://${host}/en/legis/ord/999/s1">Missing legislation</a><a href="https://www.hklii.org.evil.example/en/legis/ord/481">Unrelated host</a><a href="https://nothklii.org/en/legis/ord/481">Another unrelated host</a>`;
+      const job = await prepare(db, {
+        fileName: "legislation-links.xlsx",
+        adds: "",
+        updates: "19",
+        deletes: "",
+        rows: [update],
+        links: [],
+      });
+      await advance(db, job.id);
+      const completed = await advance(db, job.id);
+      assert.equal(completed.status, "complete");
+      const sections = await db.query(
+        `SELECT s."sectionNumber" AS section FROM "_ClicPageToLegislationSection" r JOIN "LegislationSection" s ON s.id=r."B" JOIN "ClicPage" p ON p.id=r."A" WHERE p.nid=10 ORDER BY s."sectionNumber"`,
+      );
+      assert.deepEqual(
+        sections.rows,
+        [{ section: "11" }, { section: "14" }],
+        host,
+      );
+      const caps = await db.query(
+        `SELECT c."capNumber" AS cap FROM "_ClicPageToLegislationCap" r JOIN "LegislationCap" c ON c.id=r."B" JOIN "ClicPage" p ON p.id=r."A" WHERE p.nid=10`,
+      );
+      assert.deepEqual(caps.rows, [{ cap: "480" }], host);
+      assert(
+        completed.warnings.some((w) =>
+          w.includes("unresolved legislation 999/1"),
+        ),
+        host,
+      );
+    }
+  },
+);
