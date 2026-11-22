@@ -4,6 +4,17 @@ import {generateChunksBatched} from './chunks-batched.mjs';
 // A failed wave can safely be replayed: generation upserts preserve ready vectors.
 export async function generateChunkWave({client,createClient,limit=64,afterId=0,concurrency=2,apply=false}) {
  if(!Number.isSafeInteger(concurrency)||concurrency<1||concurrency>4||!Number.isSafeInteger(limit)||limit<1||limit>128||!Number.isSafeInteger(afterId)||afterId<0)throw Error('Invalid chunk wave bounds');
+ const lockKey='clic:judgment-document-scan';
+ const {rows:[lock]}=await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',[lockKey]);
+ if(!lock.acquired)throw Error('Another importer or chunk scan owns this database');
+ try {
+  return await runWave({client,createClient,limit,afterId,concurrency,apply});
+ } finally {
+  await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[lockKey]);
+ }
+}
+
+async function runWave({client,createClient,limit,afterId,concurrency,apply}) {
  const ids=(await client.query('SELECT id FROM judgment_documents WHERE id>$1 ORDER BY id LIMIT $2',[afterId,limit*concurrency])).rows.map(r=>Number(r.id));
  const jobs=[];
  for(let offset=0;offset<ids.length;offset+=limit){

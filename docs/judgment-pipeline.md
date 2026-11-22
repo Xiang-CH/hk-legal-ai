@@ -64,7 +64,7 @@ node scripts/judgments/run.mjs --phase embed
 node scripts/judgments/run.mjs --phase verify --require-vectors
 ```
 
-The embedding phase defaults to an estimate. Paid execution additionally requires `--apply --approve-cost --max-tokens=N` and the relevant database safety acknowledgement. The ceiling includes retries and is measured with the embedding model's `cl100k_base` tokenizer, independently of the chunker's `o200k_base` tokenizer. `--all` repeats bounded batches while retaining the same total token ceiling; failures or budget exhaustion stop the run. Do not use test vectors in a real corpus. A full-corpus embedding budget has not been approved.
+The embedding phase defaults to an estimate. Paid execution additionally requires `--apply --approve-cost --max-tokens=N` and the relevant database safety acknowledgement. The ceiling includes retries and is measured with the embedding model's `cl100k_base` tokenizer, independently of the chunker's `o200k_base` tokenizer. `--all` processes pending rows under the same token ceiling and reports failures with exit code 2. Review failed rows before running with `--retry-failed`, which selects only failed rows under the same budget controls. Budget exhaustion, unexpected accounting errors and authentication errors stop the run. Do not use test vectors in a real corpus.
 
 For an empty migrated fixture database:
 

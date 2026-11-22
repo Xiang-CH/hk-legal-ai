@@ -5,7 +5,7 @@ import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { verifyWriteAccess } from './db.mjs';
 import { syncManagedLinks } from './legislation-links.mjs';
-import { walk, parseSourcePath, checksum } from './source.mjs';
+import { walk, parseSourcePath, readSourceSnapshot } from './source.mjs';
 
 const VERSION = 'references-3';
 const normalize = value => String(value).normalize('NFC').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase().replace(/^\[(\d{4})\]\s*(HK[A-Z]+)\s*(\d+)$/, '[$1] $2 $3');
@@ -77,9 +77,10 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
     const identity = parseSourcePath(root,file);
     if (identity?.kind !== 'sidecar') continue;
     const matches = byIdentity.get(identityKey(identity.court,identity.year,Number(identity.number),identity.language)) ?? [];
+    const sidecarText=await readFile(file,'utf8');
     if (matches.length!==1) { record({file,status:'unmatched-or-ambiguous-sidecar'}); continue; }
     try {
-      const data=JSON.parse(await readFile(file,'utf8'));
+      const data=JSON.parse(sidecarText);
       if(!Array.isArray(data)||data.some(value=>typeof value!=='string'))throw Error('Expected citation array');
       for (const original of data) aliases.push({judgment_id:matches[0].id,original});
     }
@@ -129,8 +130,9 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
     const source = byId.get(doc.judgment_id);
     if (!source) continue;
     const sourceFile=path.resolve(root,doc.source_path);
-    if(await checksum(sourceFile)!==doc.source_checksum) {record({sourceId:source.id,status:'stale-source'});continue;}
-    const data = JSON.parse(await readFile(sourceFile,'utf8'));
+    const snapshot=await readSourceSnapshot(sourceFile);
+    if(snapshot.digest!==doc.source_checksum) {record({sourceId:source.id,status:'stale-source'});continue;}
+    const data = JSON.parse(snapshot.bytes.toString('utf8'));
     const evidence = [];
     const paragraphs = batchSize>1?pageParagraphs.get(String(doc.id))??[]:(await client.query('SELECT id,anchor,html,content FROM judgment_paragraphs WHERE document_id=$1',[doc.id])).rows;
     for (const paragraph of paragraphs) {

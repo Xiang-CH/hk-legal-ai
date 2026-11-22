@@ -7,6 +7,7 @@ import { searchJudgmentChunks, resolveLanguageCodes, type JudgmentChunkHit } fro
 import { getEmbeddings } from "@/lib/clic-api";
 import {
 	TOOL_TIMEOUT_MS,
+	SEARCH_FALLBACK_BUDGET_MS,
 	RERANK_TOP_JUDGMENT,
 	withTimeout,
 	withToolSpan,
@@ -64,7 +65,7 @@ export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 /** Use lexical full text when available, then preserve summary retrieval if full-text storage or the embedding provider is unavailable. */
 async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<JudgmentToolOutput> {
 	if (fulltextEnabled()) {
-		const hits = await searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)).catch((error: unknown) => {
+		const hits = await withTimeout(searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)), Math.floor(SEARCH_FALLBACK_BUDGET_MS / 2), 'judgment lexical fallback').catch((error: unknown) => {
       console.error("Judgment lexical full-text search failed; preserving summary fallback", { message: error instanceof Error ? error.message : "Unknown error" });
       return [];
     });

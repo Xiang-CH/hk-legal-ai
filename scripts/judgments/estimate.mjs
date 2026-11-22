@@ -70,7 +70,7 @@ try {
   if(failure||workerFailure)throw failure??workerFailure;
   const worker=idle.pop();
   if(worker.threadId<0)throw Error('Estimator worker unavailable');
-  const task=work(worker,{file,identity,matches:metadata.get(key(identity))??[]}).then(record).finally(()=>{idle.push(worker);inflight.delete(task);});
+  const task=work(worker,{file,identity,matches:identity.number && identity.year && identity.language ? metadata.get(key(identity))??[] : []}).then(record).finally(()=>{idle.push(worker);inflight.delete(task);});
   task.catch(error=>{failure=error;});
   inflight.add(task);queued++;
  }

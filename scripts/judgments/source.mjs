@@ -13,7 +13,8 @@ export function parseSourcePath(root, file) {
   const languageFile = base.match(/^(EN|TC)\.json$/i);
   const number = rel.length >= 4 && /^\d+$/.test(rel.at(-2)) ? rel.at(-2) : null;
   const _fileMatch = base.match(/^(\d+)(?:[-_](EN|TC))?\.json$/i);
-  return { court, year: Number.isFinite(year) ? year : null, number: number ?? _fileMatch?.[1] ?? null,
+  const numberConflict = number !== null && _fileMatch && Number(number) !== Number(_fileMatch[1]);
+  return { court, year: Number.isFinite(year) ? year : null, number: numberConflict ? null : number ?? _fileMatch?.[1] ?? null,
     language: languageFile?.[1].toUpperCase() ?? base.match(/^(EN|TC)_cit\.json$/i)?.[1].toUpperCase() ?? _fileMatch?.[2]?.toUpperCase() ?? null, kind: sidecar ? 'sidecar' : (languageFile || _fileMatch) ? 'content' : 'other', path: rel.join('/') };
 }
 
@@ -25,6 +26,11 @@ export async function* walk(root) {
     else if (ent.isFile()) yield _filePath;
   }
 }
+export async function readSourceSnapshot(file) {
+  const bytes = await fs.promises.readFile(file);
+  return {bytes, digest:crypto.createHash('sha256').update(bytes).digest('hex')};
+}
+
 /** Stream a file into SHA-256 without loading the full judgment into memory. */
 export const checksum = async _filePath2 => { const _hasher=crypto.createHash('sha256'); for await (const _buffer of fs.createReadStream(_filePath2)) _hasher.update(_buffer); return _hasher.digest('hex'); };
 /** Return a rejection reason for malformed or empty content; null means the supported shape is valid. */

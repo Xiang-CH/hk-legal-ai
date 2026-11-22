@@ -7,14 +7,14 @@ export const hash = _textValue => createHash('sha256').update(_textValue).digest
 export function chunkGeneration(documentGeneration, chunks, model, deployment, version) {
   return hash(JSON.stringify([String(documentGeneration), chunks.map(chunk => chunk.input_checksum), model, deployment, version, '1']));
 }
-export const tokens = _textValue2 => tokenizer.encode(_textValue2).length;
+export const tokens = _textValue2 => tokenizer.encode(_textValue2, [], []).length;
 /** Produce adjacent Han-character bigrams plus Latin tokens for bilingual lexical matching. */
 export const cjk = _textValue3 => (_textValue3.match(/[\p{Script=Han}]+/gu) ?? []).flatMap(word => {const characters=Array.from(word);return characters.length<2?[word]:characters.slice(0,-1).map((character,index)=>character+characters[index+1]);}).concat(_textValue3.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ');
 /** Split ordered blocks into bounded, overlapping chunks with exact source spans and metadata-prefixed embedding inputs. */
 export function buildChunks(blocks, metadata = {}, options = {}) {
  const target = options.targetTokens ?? 600, max = options.maxTokens ?? 800;
  if (!(target > 0 && target <= max && max <= 800)) throw Error('Invalid token limits');
- const contextText = value => typeof value==='string' ? tokenizer.decode(tokenizer.encode(value).slice(0,100)) : value;
+ const contextText = value => typeof value==='string' ? tokenizer.decode(tokenizer.encode(value, [], []).slice(0,100)) : value;
  const partiesContext=contextText(metadata.parties);
  let heading = contextText(metadata.heading);
  const input = text => {
@@ -34,10 +34,11 @@ export function buildChunks(blocks, metadata = {}, options = {}) {
   if (/heading|^h[1-6]$/.test(block.block_type ?? block.blockType ?? '')) {flush();heading=contextText(block.content);}
   let start=0;
   while(start < block.content.length) {
-   let end=block.content.length;
+   let end=Math.min(block.content.length,start+max*8);
+   if(/[\uD800-\uDBFF]/.test(block.content[end-1])) end--;
    if(tokens(input(block.content.slice(start,end)))>max) {
     let best=start;
-    for(const match of block.content.slice(start).matchAll(/[.!?。！？；;]\s*/gu)) { const candidate=start+match.index+match[0].length; if(tokens(input(block.content.slice(start,candidate)))<=max) best=candidate; else break; }
+    for(const match of block.content.slice(start,end).matchAll(/[.!?。！？；;]\s*/gu)) { const candidate=start+match.index+match[0].length; if(tokens(input(block.content.slice(start,candidate)))<=max) best=candidate; else break; }
     if(best===start) { let lo=start+1,hi=end; while(lo<=hi){let mid=Math.floor((lo+hi)/2); if(tokens(input(block.content.slice(start,mid)))<=max){best=mid;lo=mid+1;}else hi=mid-1;} if(best>start && /[\uD800-\uDBFF]/.test(block.content[best-1])) best--; }
     if(best===start) throw Error('Cannot fit source character'); end=best;
    }

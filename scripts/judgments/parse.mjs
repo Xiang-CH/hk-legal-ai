@@ -1,6 +1,6 @@
 import { parse, serializeOuter, serialize } from 'parse5';
 
-export const PARSER_VERSION = 'structural-6';
+export const PARSER_VERSION = 'structural-7';
 const excluded = new Set(['head','script','style','nav','button','input','select','textarea','noscript','template']);
 const boundaries = new Set(['p','div','section','article','main','li','ul','ol','table','thead','tbody','tfoot','tr','td','th','h1','h2','h3','h4','h5','h6','pre','blockquote']);
 const leafBlocks = new Set(['p','table','li','h1','h2','h3','h4','h5','h6','pre','blockquote']);
@@ -51,12 +51,22 @@ export function parseJudgment(html) {
   const root=parse(html);
   const blocks=[];
   let continuation=false;
+  let pendingMarker;
   function append(node,blockType,retainedHtml) {
     const content=clean(nodeText(node));
-    if(!content)return;
     const marker=blockType==='paragraph'?[node,...descendants(node)].find(markerLabel):null;
-    const anchor=(marker && findAnchor(marker)) || findAnchor(node);
-    const label=marker ? markerLabel(marker) : null;
+    if (!content) {
+      if (marker) pendingMarker={label:markerLabel(marker),anchor:findAnchor(marker),html:retainedHtml};
+      return;
+    }
+    const carried = !marker && (blockType==='paragraph' || blockType==='text') ? pendingMarker : undefined;
+    pendingMarker=undefined;
+    if (carried) {
+      blockType='paragraph';
+      retainedHtml=carried.html+'\n'+retainedHtml;
+    }
+    const anchor=(marker && findAnchor(marker)) || carried?.anchor || findAnchor(node);
+    const label=marker ? markerLabel(marker) : carried?.label ?? null;
     const ordinal=/^\d+[A-Za-z]?[.)](?:\s|$)/.test(content);
     const previous=blocks.at(-1);
     if(blockType==='paragraph'&&!label&&!anchor&&!ordinal&&continuation&&previous?.blockType==='paragraph') {

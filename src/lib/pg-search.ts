@@ -101,7 +101,7 @@ async function runFusion<T>(args: {
 	opts: PgSearchOpts;
 	finalSelect: string;
 }): Promise<T[]> {
-	const cjk = cjkTokens(args.query);
+	const cjk = cjkTokens(args.query, true);
 	const langs = resolveLanguageCodes(args.query, args.opts.languageCodes);
 	const emb = `[${args.opts.embedding.join(",")}]`;
 	const params: unknown[] = [args.query, cjk, emb, langs];

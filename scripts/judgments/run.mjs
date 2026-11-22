@@ -11,7 +11,7 @@ import { generateChunks } from './chunks.mjs';
 import { embedPending,azureEmbed } from './embed.mjs';
 import { readBudget,reserveBudgetTokens,recordProviderUsage } from './budget.mjs';
 
-const {values:options}=parseArgs({options:{phase:{type:'string'},fast:{type:'boolean',default:false},'chunk-concurrency':{type:'string',default:'1'},concurrency:{type:'string',default:'4'},dir:{type:'string'},apply:{type:'boolean',default:false},all:{type:'boolean',default:false},limit:{type:'string',default:'100'},after:{type:'string',default:'0'},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'},'approve-cost':{type:'boolean',default:false},'max-tokens':{type:'string',default:'0'},'batch-size':{type:'string',default:'16'},'require-vectors':{type:'boolean',default:false},'ack-destructive':{type:'boolean',default:false},'budget-file':{type:'string'},'budget-scope':{type:'string',default:'full'},'allow-production':{type:'boolean',default:false},'restore-receipt':{type:'string'},'accept-azure-ai-omission':{type:'boolean',default:false}}});
+const {values:options}=parseArgs({options:{phase:{type:'string'},fast:{type:'boolean',default:false},'chunk-concurrency':{type:'string',default:'1'},concurrency:{type:'string',default:'4'},dir:{type:'string'},apply:{type:'boolean',default:false},all:{type:'boolean',default:false},limit:{type:'string',default:'100'},after:{type:'string',default:'0'},'test-database':{type:'boolean',default:false},'ack-backup':{type:'string'},'retry-failed':{type:'boolean',default:false},'approve-cost':{type:'boolean',default:false},'max-tokens':{type:'string',default:'0'},'batch-size':{type:'string',default:'16'},'require-vectors':{type:'boolean',default:false},'ack-destructive':{type:'boolean',default:false},'budget-file':{type:'string'},'budget-scope':{type:'string',default:'full'},'allow-production':{type:'boolean',default:false},'restore-receipt':{type:'string'},'accept-azure-ai-omission':{type:'boolean',default:false}}});
 const phases=['ingest','references','chunks','embed','verify','migrate','rollback'];
 if(!phases.includes(options.phase))throw Error(`Choose --phase ${phases.join('|')}`);
 const limit=Number(options.limit),afterId=Number(options.after),maxTokens=Number(options['max-tokens']),batchSize=Number(options['batch-size']);
@@ -47,6 +47,7 @@ if(options.phase==='migrate'){
    const result=await resolveReferences({client,root:options.dir,apply:options.apply,batchSize:options.fast?64:1,onProgress:progress=>console.log(JSON.stringify({phase:'references',...progress})),limit:options.all?Infinity:limit});
    console.log(JSON.stringify(result));
   }else if(options.phase==='chunks'){
+   if (!(await client.query("SELECT pg_try_advisory_lock(hashtextextended('clic:judgment-document-scan',0)) AS acquired")).rows[0].acquired) throw Error('Another importer or chunk scan owns this database');
    const parallel=Number(options['chunk-concurrency']);
    if(!Number.isSafeInteger(parallel)||parallel<1||parallel>4||parallel>1&&!options.fast)throw Error('Chunk concurrency requires --fast and must be 1..4');
    const {generateChunkWave}=await import('./chunks-parallel.mjs');
@@ -66,15 +67,17 @@ if(options.phase==='migrate'){
   }else if(options.phase==='embed'){
    if(options.apply && !(await client.query("SELECT pg_try_advisory_lock(hashtextextended('clic:judgment-embedding-run',0)) AS acquired")).rows[0].acquired)throw Error('Another embedding process already owns this database');
    const total={ready:0,failed:0,requests:0,tokens:0};
+   let chunkCursor='0';
    for(;;){
     const budgetFile=options['budget-file'];
-    const result=await embedPending({client,apply:options.apply,embed:(inputs,config)=>azureEmbed(inputs,{...config,onUsage:usage=>recordProviderUsage(budgetFile,usage.usage.total_tokens)}),concurrency:Number(options.concurrency),beforeRequest:options.apply?request=>reserveBudgetTokens(budgetFile,{tokens:request.tokens,scope:options['budget-scope'],purpose:'judgment-embedding'}):undefined,limit,batchSize,approveCost:options['approve-cost'],maxTokens:maxTokens-total.tokens});
+    const result=await embedPending({client,apply:options.apply,embed:(inputs,config)=>azureEmbed(inputs,{...config,onUsage:usage=>recordProviderUsage(budgetFile,usage.usage.total_tokens)}),concurrency:Number(options.concurrency),retryFailed:options['retry-failed'],afterId:chunkCursor,beforeRequest:options.apply?request=>reserveBudgetTokens(budgetFile,{tokens:request.tokens,scope:options['budget-scope'],purpose:'judgment-embedding'}):undefined,limit,batchSize,approveCost:options['approve-cost'],maxTokens:maxTokens-total.tokens});
     if(!options.apply){console.log(JSON.stringify(result));break;}
     for(const key of ['ready','failed','requests','tokens'])total[key]+=result[key]??0;
     console.log(JSON.stringify({phase:'embed',...result}));
-    if(result.failed){process.exitCode=2;break;}
+    if(result.failed)process.exitCode=2;
     if(result.budgetExhausted){process.exitCode=3;break;}
-    if(!options.all||!result.ready||total.tokens>=maxTokens)break;
+    if(!options.all||(!result.ready&&!result.failed)||total.tokens>=maxTokens)break;
+    chunkCursor=result.lastChunkId;
    }
    if(options.apply)console.log(JSON.stringify({phase:'embed',total}));
   }else if(options.phase==='rollback'){

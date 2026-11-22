@@ -35,7 +35,7 @@ try{
   assert.equal(result.rows.length,1,`Missing pilot passage ${test.source}`);rows.push(result.rows[0]);
  }
  const inputs=[...rows.map(row=>row.embedding_input),...tests.map(test=>test.query)];
- const estimatedTokens=inputs.reduce((sum,input)=>sum+billing.encode(input).length,0);
+ const estimatedTokens=inputs.reduce((sum,input)=>sum+billing.encode(input, [], []).length,0);
  assert(estimatedTokens<=10000&&estimatedTokens*pricePerMillion/1000000<=approvedUsd,'Pilot exceeds approved budget');
  let provider;
  const vectors=await azureEmbed(inputs,{deployment:process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT??'text-embedding-3-large',onUsage:usage=>{provider=usage;}});

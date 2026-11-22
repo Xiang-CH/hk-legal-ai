@@ -1,8 +1,8 @@
-import { readFile } from 'node:fs/promises';
+
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { walk, parseSourcePath, checksum, validateShape, sourceHtml, checkSourceIdentity } from './source.mjs';
+import { walk, parseSourcePath, checksum, readSourceSnapshot, validateShape, sourceHtml, checkSourceIdentity } from './source.mjs';
 import { parseJudgment, PARSER_VERSION } from './parse.mjs';
 import { verifyWriteAccess } from './db.mjs';
 import { clearManagedLinks } from './legislation-links.mjs';
@@ -14,8 +14,8 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, f
   root = path.resolve(root);
   const runId = randomUUID(), outcomes = [];
   if(apply) {
-    const lock=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',[root])).rows[0];
-    if(!lock.acquired)throw Error('Another importer owns this source root');
+    const lock=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',['clic:judgment-document-scan'])).rows[0];
+    if(!lock.acquired)throw Error('Another importer or chunk scan owns this database');
   }
   try {
     if(apply) {
@@ -28,11 +28,13 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, f
       const sourcePath = path.relative(root,file).split(path.sep).join('/');
       let digest=null, status='quarantined', error=null;
       try {
-        digest=await checksum(file);
+        if(identity?.kind !== 'content') digest=await checksum(file);
         if(identity?.kind !== 'content') { status='skipped'; }
         else {
           if(!identity.court || !identity.year || !identity.number || !identity.language) throw new Error('Incomplete source identity');
-          const data=JSON.parse(await readFile(file,'utf8'));
+          const snapshot=await readSourceSnapshot(file);
+          digest=snapshot.digest;
+          const data=JSON.parse(snapshot.bytes.toString('utf8'));
           const invalid=validateShape(data,identity.language); if(invalid) throw new Error(invalid);
           const parsed=parseJudgment(sourceHtml(data));
           if(apply) await client.query('BEGIN');
@@ -65,7 +67,7 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, f
     }
     if(apply) await client.query("UPDATE judgment_import_runs SET status='completed',completed_at=now() WHERE id=$1",[runId]);
   } catch(_error3) { if(apply) await client.query("UPDATE judgment_import_runs SET status='failed',completed_at=now() WHERE id=$1",[runId]).catch(()=>{}); throw _error3; }
-  finally {if(apply)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[root]).catch(()=>{});}
+  finally {if(apply)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',['clic:judgment-document-scan']).catch(()=>{});}
   return {runId,outcomes};
 }
 /** Parse bounded import options, validate write authorization and close the explicit database connection. */

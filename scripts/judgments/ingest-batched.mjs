@@ -1,8 +1,8 @@
-import {readFile} from 'node:fs/promises';
+
 import {randomUUID} from 'node:crypto';
 import path from 'node:path';
 import pg from 'pg';
-import {walk,parseSourcePath,checksum,validateShape,sourceHtml,checkSourceIdentity} from './source.mjs';
+import {walk,parseSourcePath,checksum,readSourceSnapshot,validateShape,sourceHtml,checkSourceIdentity} from './source.mjs';
 import {parseJudgment,PARSER_VERSION} from './parse.mjs';
 import {clearManagedLinks} from './legislation-links.mjs';
 const key=r=>[r.court.toUpperCase(),r.year,Number(r.number),r.language.toLowerCase()].join('|');
@@ -55,7 +55,7 @@ export async function importBatched({client,root,apply=false,limit=Infinity,data
   await queueRecord(rows.map(({sourcePath,checksum,status,error})=>({sourcePath,checksum,status,error})));
  }
  try{
-  if(apply){locked=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',[root])).rows[0].acquired;if(!locked)throw Error('Another importer owns this source root');await client.query("UPDATE judgment_import_runs SET status='interrupted',completed_at=now() WHERE root=$1 AND status='running'",[root]);await client.query("INSERT INTO judgment_import_runs(id,root,parser_version,status) VALUES($1,$2,$3,'running')",[runId,root,PARSER_VERSION]);}
+  if(apply){locked=(await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS acquired',['clic:judgment-document-scan'])).rows[0].acquired;if(!locked)throw Error('Another importer or chunk scan owns this database');await client.query("UPDATE judgment_import_runs SET status='interrupted',completed_at=now() WHERE root=$1 AND status='running'",[root]);await client.query("INSERT INTO judgment_import_runs(id,root,parser_version,status) VALUES($1,$2,$3,'running')",[runId,root,PARSER_VERSION]);}
   const identities=new Map();
   for(const r of (await client.query('SELECT id,"courtName",year,number,"languageCode","neutralCitation",url FROM "Judgment"')).rows){const k=key({court:r.courtName,year:r.year,number:r.number,language:r.languageCode});identities.set(k,[...(identities.get(k)??[]),r]);}
   const existing=new Map((await client.query('SELECT judgment_id,source_path,source_checksum,parser_version FROM judgment_documents')).rows.map(d=>[d.source_path,d]));
@@ -66,18 +66,20 @@ export async function importBatched({client,root,apply=false,limit=Infinity,data
    if(files++>=limit)break;if(fatal)throw fatal;
    const identity=parseSourcePath(root,file),sourcePath=path.relative(root,file).split(path.sep).join('/');let digest;
    try{
-    digest=await checksum(file);
+    const snapshot=identity?.kind==='content' ? await readSourceSnapshot(file) : null;
+    digest=snapshot?.digest ?? await checksum(file);
     if(identity?.kind!=='content'){pending.push({sourcePath,checksum:digest,status:'skipped'});}
     else{
      if(!identity.court||!identity.year||!identity.number||!identity.language)throw Error('Incomplete source identity');
      const matches=identities.get(key(identity))??[];if(matches.length!==1)throw Error(matches.length?'Ambiguous judgment identity':'Unmatched judgment identity');
      checkSourceIdentity(identity,matches[0]);
-     const judgmentId=matches[0].id;if(seen.has(judgmentId))throw Error('Duplicate source identity');seen.add(judgmentId);
+     const judgmentId=matches[0].id;if(seen.has(judgmentId))throw Error('Duplicate source identity');
      const previous=existing.get(sourcePath);
      const byJudgment=existingById.get(judgmentId);
      if((previous&&previous.judgment_id!==judgmentId)||(byJudgment&&byJudgment.source_path!==sourcePath))throw Error('Conflicting document identity');
      if(previous?.judgment_id===judgmentId&&previous.source_checksum===digest&&previous.parser_version===PARSER_VERSION)pending.push({sourcePath,checksum:digest,status:'unchanged'});
-     else{const data=JSON.parse(await readFile(file,'utf8'));const invalid=validateShape(data,identity.language);if(invalid)throw Error(invalid);checkSourceIdentity(identity,matches[0],data);const html=sourceHtml(data);const parsed=parseJudgment(html);batch.push({sourcePath,checksum:digest,judgmentId,html,parsed});bytes+=Buffer.byteLength(html)+Buffer.byteLength(JSON.stringify(parsed));}
+     else{const data=JSON.parse(snapshot.bytes.toString('utf8'));const invalid=validateShape(data,identity.language);if(invalid)throw Error(invalid);checkSourceIdentity(identity,matches[0],data);const html=sourceHtml(data);const parsed=parseJudgment(html);batch.push({sourcePath,checksum:digest,judgmentId,html,parsed});bytes+=Buffer.byteLength(html)+Buffer.byteLength(JSON.stringify(parsed));}
+     seen.add(judgmentId);
     }
    }catch(error){pending.push({sourcePath,checksum:digest??null,status:'quarantined',error:error.message});}
    if(pending.length>=ingestBatchSize){await queueRecord(pending);pending=[];}
@@ -86,5 +88,5 @@ export async function importBatched({client,root,apply=false,limit=Infinity,data
   await dispatch();await Promise.all(jobs);if(fatal)throw fatal;await queueRecord(pending);await writes;
   if(apply)await client.query("UPDATE judgment_import_runs SET status='completed',completed_at=now() WHERE id=$1",[runId]);return {runId,outcomes};
  }catch(error){await Promise.all(jobs);await writes;if(apply&&locked)await client.query("UPDATE judgment_import_runs SET status='failed',completed_at=now() WHERE id=$1",[runId]).catch(()=>{});throw error;}
- finally{if(pool)await pool.end();if(locked)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',[root]).catch(()=>{});}
+ finally{if(pool)await pool.end();if(locked)await client.query('SELECT pg_advisory_unlock(hashtextextended($1,0))',['clic:judgment-document-scan']).catch(()=>{});}
 }

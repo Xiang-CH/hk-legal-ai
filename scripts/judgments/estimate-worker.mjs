@@ -14,6 +14,7 @@ parentPort.on('message',async({file,identity,matches})=>{
   const source=await readFile(file);
   row.checksum=createHash('sha256').update(source).digest('hex');
   row.sourceBytes=source.length;
+  if(!identity.number || !identity.year || !identity.language) throw Error('incomplete-source-identity');
   if(matches.length!==1)throw Error(matches.length?'ambiguous-metadata':'missing-metadata');
   const data=JSON.parse(source.toString('utf8'));
   const invalid=validateShape(data,identity.language);if(invalid)throw Error(invalid);
@@ -21,7 +22,7 @@ parentPort.on('message',async({file,identity,matches})=>{
   const html=sourceHtml(data);
   const parsed=parseJudgment(html);
   const chunks=buildChunks(parsed.blocks,{neutral_citation:matches[0].neutralCitation,parties:matches[0].parties});
-  Object.assign(row,{status:'estimated',judgmentId:matches[0].id,htmlBytes:Buffer.byteLength(html),plainTextBytes:Buffer.byteLength(parsed.plainText),blocks:parsed.blocks.length,numberedBlocks:parsed.blocks.filter(block=>block.label!==null).length,chunks:chunks.length,chunkingTokens:chunks.reduce((sum,chunk)=>sum+chunk.token_count,0),billableTokens:chunks.reduce((sum,chunk)=>sum+billing.encode(chunk.embedding_input).length,0)});
+  Object.assign(row,{status:'estimated',judgmentId:matches[0].id,htmlBytes:Buffer.byteLength(html),plainTextBytes:Buffer.byteLength(parsed.plainText),blocks:parsed.blocks.length,numberedBlocks:parsed.blocks.filter(block=>block.label!==null).length,chunks:chunks.length,chunkingTokens:chunks.reduce((sum,chunk)=>sum+chunk.token_count,0),billableTokens:chunks.reduce((sum,chunk)=>sum+billing.encode(chunk.embedding_input, [], []).length,0)});
  }catch(error){row.reason=error instanceof SyntaxError?'invalid-json':error.message;}
  parentPort.postMessage(row);
 });

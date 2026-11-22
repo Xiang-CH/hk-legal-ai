@@ -22,3 +22,7 @@ assert(structured.blocks.find(block=>block.blockType==='table').html.includes('<
 assert.equal(structured.blocks.find(block=>block.blockType==='footnote').label,null);
 assert(!structured.plainText.includes('excluded control'));
 console.log(JSON.stringify({parserVersion:PARSER_VERSION,inlineWords:true,markerBoundaries:true,sourceLabelsOnly:true,continuations:true,quotation:true,table:true,footnote:true,providerCalls:0}));
+const detachedMarker=parseJudgment('<p><a id="p1"></a></p><p>Reasons</p>');
+assert.deepEqual(detachedMarker.blocks.map(({label,anchor,content})=>({label,anchor,content})), [
+  {label:'1',anchor:'p1',content:'Reasons'},
+]);
