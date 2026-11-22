@@ -274,29 +274,26 @@ type RenderItem =
   | { kind: "reasoning-group"; parts: ReasoningUIPart[]; startIndex: number };
 
 /** Merge runs of adjacent reasoning parts so multi-step thinking shows as one card. */
-function groupConsecutiveReasoning(parts: MessagePart[]): RenderItem[] {
+function groupConsecutiveReasoning(parts: MessagePart[], collapsedToolId?: string): RenderItem[] {
   const items: RenderItem[] = [];
-  let i = 0;
-  while (i < parts.length) {
-    const part = parts[i];
-    if (part?.type === "reasoning") {
-      const group: ReasoningUIPart[] = [];
-      const startIndex = i;
-      while (i < parts.length && parts[i]?.type === "reasoning") {
-        group.push(parts[i] as ReasoningUIPart);
-        i += 1;
+  parts.forEach((part, index) => {
+    if (part.type === "reasoning") {
+      const previous = items.at(-1);
+      if (previous?.kind === "reasoning-group") {
+        previous.parts.push(part);
+      } else {
+        items.push({ kind: "reasoning-group", parts: [part], startIndex: index });
       }
-      if (group.some((p) => p.text.trim().length > 0)) {
-        items.push({ kind: "reasoning-group", parts: group, startIndex });
-      }
-    } else if (part) {
-      items.push({ kind: "part", part, index: i });
-      i += 1;
-    } else {
-      i += 1;
+    } else if (
+      (part.type === "text" && part.text.trim()) ||
+      part.type === "file" ||
+      isAskQuestionPart(part) ||
+      (isChatToolPart(part) && (!collapsedToolId || part.toolCallId === collapsedToolId))
+    ) {
+      items.push({ kind: "part", part, index });
     }
-  }
-  return items;
+  });
+  return items.filter((item) => item.kind === "part" || item.parts.some((part) => part.text.trim()));
 }
 
 const PreviewMessage = React.forwardRef<
@@ -371,7 +368,7 @@ const PreviewMessage = React.forwardRef<
           )}
 
           {message.role === "assistant" &&
-            groupConsecutiveReasoning(message.parts ?? []).map((item) => {
+            groupConsecutiveReasoning(message.parts, collapseToolProgress ? toolParts[0]?.toolCallId : undefined).map((item) => {
               if (item.kind === "reasoning-group") {
                 return (
                   <ReasoningCard
