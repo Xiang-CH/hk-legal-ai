@@ -269,7 +269,9 @@ async function apply(db: pg.Client, job: Job, id: string) {
   for (const p of all) byPath.set(pathKey(p.url), p.nid);
   for (const l of job.links) {
     const key = pathKey(l.url);
-    if (key) byPath.set(key, l.nid);
+    // Live pages are authoritative; unselected/stale workbook rows cannot
+    // redirect an existing path to a different page.
+    if (key && !byPath.has(key)) byPath.set(key, l.nid);
   }
   const affected = changed.flatMap((c) => (c.nid === null ? [] : [c.nid]));
   const affectedIds = affected.flatMap((n) => {

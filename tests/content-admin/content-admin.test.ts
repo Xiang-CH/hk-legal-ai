@@ -716,7 +716,11 @@ test(
         updates: "100",
         deletes: "",
         rows: [update],
-        links: [{ nid: 10, url: "https://other.example/en/topics/page-20" }],
+        links: [
+          { nid: 10, url: "https://other.example/en/topics/page-20" },
+          { nid: 20, url: "https://wwwnew.clic.org.hk/en/topics/page-20" },
+          { nid: 10, url: "https://clic.org.hk/en/topics/page-20" },
+        ],
       });
       await advance(db, job.id);
       const completed = await advance(db, job.id);
@@ -763,17 +767,19 @@ test(
       links: [],
     });
     await advance(db, old.id);
+    const referenceTime = new Date();
     await db.query(
-      "UPDATE content_import_jobs SET created_at=now()-interval '1 day' WHERE id=$1",
-      [old.id],
+      "UPDATE content_import_jobs SET created_at=$2::timestamptz-interval '1 day' WHERE id=$1",
+      [old.id, referenceTime],
     );
     // Equal timestamps exercise the ID tiebreaker between history pages.
     for (let i = 0; i < 25; i++)
       await db.query(
-        "INSERT INTO content_import_jobs (id,payload,created_at) VALUES ($1,$2,'2027-01-01T00:00:00Z')",
+        "INSERT INTO content_import_jobs (id,payload,created_at) VALUES ($1,$2,$3)",
         [
           randomUUID(),
           JSON.stringify({ fileName: `Newer ${i}`, status: "preview" }),
+          referenceTime,
         ],
       );
     const request = (query = "") =>
@@ -855,5 +861,61 @@ test(
         host,
       );
     }
+  },
+);
+
+test(
+  "database disconnect during external work rejects safely and preserves the saved checkpoint",
+  live,
+  async () => {
+    const { withDatabase } =
+      await import("../../src/lib/content-admin/database");
+    await seed();
+    const job = await prepare(db, {
+      fileName: "disconnect.xlsx",
+      adds: "",
+      updates: "100",
+      deletes: "",
+      rows: [row(100, 10)],
+      links: [],
+    });
+    const waiting = Promise.withResolvers<number>();
+    const externalWork = Promise.withResolvers<void>();
+    const callbackFinished = Promise.withResolvers<void>();
+    const operation = withDatabase(async (client) => {
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          "UPDATE content_import_jobs SET payload=jsonb_set(payload,'{status}','\"indexing\"') WHERE id=$1",
+          [job.id],
+        );
+        const pid = await client.query<{ pid: number }>(
+          "SELECT pg_backend_pid() AS pid",
+        );
+        const backend = pid.rows[0];
+        if (!backend) throw Error("Missing backend PID");
+        waiting.resolve(backend.pid);
+        await externalWork.promise;
+        await client.query("COMMIT");
+      } finally {
+        callbackFinished.resolve();
+      }
+    });
+    // Attach the rejection handler before deliberately terminating the connection.
+    const rejected = assert.rejects(
+      operation,
+      /terminating connection|connection terminated/i,
+    );
+    try {
+      const pid = await waiting.promise;
+      await db.query("SELECT pg_terminate_backend($1)", [pid]);
+      await rejected;
+      assert.equal((await load(db, job.id)).status, "preview");
+    } finally {
+      externalWork.resolve();
+      await callbackFinished.promise;
+    }
+    await advance(db, job.id);
+    assert.equal((await advance(db, job.id)).status, "complete");
   },
 );
