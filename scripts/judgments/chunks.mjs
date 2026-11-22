@@ -4,6 +4,9 @@ import { getEncoding } from 'js-tiktoken';
 import { verifyWriteAccess } from './db.mjs';
 const tokenizer = getEncoding('o200k_base');
 export const hash = _textValue => createHash('sha256').update(_textValue).digest('hex');
+export function chunkGeneration(documentGeneration, chunks, model, deployment, version) {
+  return hash(JSON.stringify([String(documentGeneration), chunks.map(chunk => chunk.input_checksum), model, deployment, version, '1']));
+}
 export const tokens = _textValue2 => tokenizer.encode(_textValue2).length;
 /** Produce adjacent Han-character bigrams plus Latin tokens for bilingual lexical matching. */
 export const cjk = _textValue3 => (_textValue3.match(/[\p{Script=Han}]+/gu) ?? []).flatMap(word => {const characters=Array.from(word);return characters.length<2?[word]:characters.slice(0,-1).map((character,index)=>character+characters[index+1]);}).concat(_textValue3.toLowerCase().match(/[a-z0-9]+/g) ?? []).join(' ');
@@ -62,7 +65,7 @@ export async function generateChunks({client,limit=100,afterId=0,apply=false,fas
    const model=options.model??'text-embedding-3-large';
    const deployment=options.deployment??process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT??model;
    const version=options.modelVersion??process.env.JUDGMENT_EMBEDDING_VERSION??'1';
-   const generation=hash(JSON.stringify([String(doc.generation),chunks.map(chunk=>chunk.input_checksum),model,deployment,version,'1']));
+   const generation=chunkGeneration(doc.generation,chunks,model,deployment,version);
    for(const chunk of chunks) {
     count++;totalTokens+=chunk.token_count;
    }

@@ -2,7 +2,13 @@
 
 This feature is opt-in. Keep `JUDGMENT_FULLTEXT_ENABLED` unset until the target database has the five additive migrations and a verified pilot. Existing summary data and its unique keys remain untouched. Full text uses a separate chunk table so rollback cannot delete summary embeddings or break existing summary loaders.
 
-## Current evidence
+## Full run (2026-11-20)
+
+The approved run verified 152,475 documents and 1,521,545 ready vectors. Coverage and legacy counts passed. Three source files and 62 original paragraphs matched in the production read-only checks. The ledger reserved US$143.14 against the US$172 cap. These results describe the structural-5 data already loaded. Parser changes require a separate impact assessment before reimporting any production files.
+
+Website acceptance remains open: the three natural-language lexical checks returned zero results, and full-corpus semantic relevance and website retrieval have not passed. Local evidence: `.audit/full-run-20261113/completion.json`, `coverage.log` and `monitor.json` in the same directory.
+
+## Historical pilot evidence (before full-run approval)
 
 The completed `structural-5` measurement covers every content file. It found 152,475 valid documents and 181 rejected empty-content files, producing 9,469,636 blocks, 1,521,545 chunks and 797,337,753 billable embedding input tokens. Independent recomputation matched the summary. Every source path and checksum matched the original audit, with no duplicate or missing content files. All 181 rejections matched the audit. Evidence is in `.audit/judgment-token-estimate-v5-complete.jsonl.summary.json`, `.audit/judgment-estimate-final-reconciliation.json` and `.audit/judgment-corpus-quarantine.json`.
 
@@ -77,6 +83,6 @@ The pilot command accepts `--source SOURCE --audit AUDIT.jsonl --output /tmp/PIL
 
 ## Outstanding rollout work
 
-The free full-corpus estimate and file reconciliation are complete. Production already has the five additive migrations and verified 26-document pilot. Full-corpus embedding approval was declined, and the capacity increase remains unapproved. Production currently has 32 GiB storage with auto-grow disabled; the proposed allocation is 128 GiB based on sample measurements including text, paragraphs, references and search indexes, with additional operational headroom required. Full-corpus execution must wait for the required approvals. An exact restore including Azure-specific extension metadata remains unverified; the user accepted the tested application-data restore with azure_ai metadata omitted for the production pilot. Any future Azure restore resource requires separate approval. Preserve the original source files and all rejected-file reports. Never mark missing text or unresolved authorities as successfully imported/resolved.
+Validate the production website search and citation links before closing #19. Preserve the original source files and rejected-file reports. The full-run ledger covers the completed run only.
 
 See `judgment-rollback.md` for recovery. Backups must live in a durable, access-controlled directory outside version control, not only in `/tmp`. Manual schema rollback requires migration-history reconciliation before reinstallation.

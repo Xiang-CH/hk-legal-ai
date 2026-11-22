@@ -28,7 +28,7 @@ try {
  await client.connect();
  try {
   await client.query('BEGIN READ ONLY');
-  const rows=(await client.query('SELECT id,"courtName",year,number,"languageCode","neutralCitation",parties FROM "Judgment"')).rows;
+  const rows=(await client.query('SELECT id,"courtName",year,number,"languageCode","neutralCitation",url,parties FROM "Judgment"')).rows;
   for(const row of rows){const identity=key({court:row.courtName,year:row.year,number:row.number,language:row.languageCode});metadata.set(identity,[...(metadata.get(identity)??[]),row]);}
  }finally{await client.query('ROLLBACK').catch(()=>{});await client.end();}
  workers=Array.from({length:workerCount},()=>{

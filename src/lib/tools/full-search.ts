@@ -1,6 +1,6 @@
 import { tool } from "ai";
 import { z } from "zod";
-import { sourceFields } from "@/lib/judgment-fulltext";
+import { sourceFields, judgmentSourceMetadata } from "@/lib/judgment-fulltext";
 import { prisma } from "@/lib/prisma";
 import {
 	searchClicChunks,
@@ -312,7 +312,7 @@ export const fullSearchTool = tool({
 								const caseSummary = casesByJudgmentId.get(item.hit.judgmentId);
 								return {
 									kind: "judgment",
-									...Object.fromEntries(Object.keys(sourceFields).map(key => [key, Reflect.get(item.hit,key)])),
+									...judgmentSourceMetadata(item.hit),
 									judgmentId: item.hit.judgmentId,
 									chunk_no: item.hit.chunk_no,
 									neutralCitation: item.hit.neutralCitation,

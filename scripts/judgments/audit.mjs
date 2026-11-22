@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { once } from 'node:events';
-import { parseSourcePath, walk, checksum, validateShape } from './source.mjs';
+import { parseSourcePath, walk, checksum, validateShape, checkSourceIdentity } from './source.mjs';
 
 const args = process.argv.slice(2);
 /** Read a CLI option or its fallback; reject a flag without its required value. */
@@ -39,8 +39,7 @@ try {
   stream.on('error', error => { streamError = error; });
   if (output !== '-') await once(stream, 'open');
   for await (const file of walk(root)) {
-    const info = parseSourcePath(root, file);
-    if (!info) continue;
+    const info = parseSourcePath(root, file) ?? {kind:"other",path:path.relative(root,file),reason:"unrecognized-path"};
     totals.files++;
     totals[info.kind === 'sidecar' ? 'sidecars' : info.kind]++;
     const row = { ...info, sha256: await checksum(file), status: 'ignored' };
@@ -52,18 +51,20 @@ try {
           : validateShape(data, info.language);
         if (invalid) { row.status = 'invalid'; row.reason = invalid; totals.invalid++; }
         else if (info.kind === 'content') {
+          if (!info.court || !info.year || !info.number || !info.language) throw Error('incomplete-source-identity');
           const key = keyOf(info);
           if (seen.has(key)) { row.status = 'conflicting'; row.reason = 'duplicate-source-identity'; totals.duplicateIdentities++; }
           else {
             seen.add(key);
             const hits = index.get(key) ?? [];
             row.status = client ? (hits.length === 1 ? 'matched' : hits.length > 1 ? 'ambiguous' : 'unmatched') : 'not-reconciled';
+            if (hits.length === 1) checkSourceIdentity(info,hits[0],data);
             if (client) totals[row.status]++;
             if (hits.length === 1) row.judgmentId = hits[0].id;
             if (hits.length > 1) row.candidates = hits.map(hit => hit.id);
           }
         } else row.status = 'validated-sidecar';
-      } catch (error) { row.status = 'invalid'; row.reason = error instanceof SyntaxError ? 'invalid-json' : 'read-failed'; totals.invalid++; }
+      } catch (error) { row.status = 'invalid'; row.reason = error instanceof SyntaxError ? 'invalid-json' : error.message; totals.invalid++; }
     }
     if (streamError) throw streamError;
     await new Promise((resolve,reject) => stream.write(JSON.stringify(row) + '\n', error => error ? reject(error) : resolve()));

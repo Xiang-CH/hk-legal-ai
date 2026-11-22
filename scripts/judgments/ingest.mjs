@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { walk, parseSourcePath, checksum, validateShape } from './source.mjs';
+import { walk, parseSourcePath, checksum, validateShape, sourceHtml, checkSourceIdentity } from './source.mjs';
 import { parseJudgment, PARSER_VERSION } from './parse.mjs';
 import { verifyWriteAccess } from './db.mjs';
 import { clearManagedLinks } from './legislation-links.mjs';
@@ -34,11 +34,12 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, f
           if(!identity.court || !identity.year || !identity.number || !identity.language) throw new Error('Incomplete source identity');
           const data=JSON.parse(await readFile(file,'utf8'));
           const invalid=validateShape(data,identity.language); if(invalid) throw new Error(invalid);
-          const parsed=parseJudgment(data.html ?? data.content ?? data.judgment ?? data.text);
+          const parsed=parseJudgment(sourceHtml(data));
           if(apply) await client.query('BEGIN');
           try {
-            const matches=await client.query('SELECT id FROM "Judgment" WHERE upper("courtName")=$1 AND year=$2 AND number=$3 AND lower("languageCode")=$4',[identity.court,identity.year,Number(identity.number),identity.language.toLowerCase()]);
+            const matches=await client.query('SELECT id,"neutralCitation",url FROM "Judgment" WHERE upper("courtName")=$1 AND year=$2 AND number=$3 AND lower("languageCode")=$4',[identity.court,identity.year,Number(identity.number),identity.language.toLowerCase()]);
             if(matches.rows.length !== 1) throw new Error(matches.rows.length ? 'Ambiguous judgment identity' : 'Unmatched judgment identity');
+            checkSourceIdentity(identity,matches.rows[0],data);
             const judgmentId=matches.rows[0].id;
             if(apply) await client.query('SELECT id FROM "Judgment" WHERE id=$1 FOR UPDATE',[judgmentId]);
             const existing=await client.query('SELECT * FROM judgment_documents WHERE judgment_id=$1 OR source_path=$2',[judgmentId,sourcePath]);
@@ -48,7 +49,7 @@ export async function importCorpus({client, root, apply=false, limit=Infinity, f
             if(apply && status==='imported') {
               if(old && (await client.query("SELECT to_regclass('judgment_managed_legislation_links') IS NOT NULL AS available")).rows[0].available)await clearManagedLinks(client,judgmentId);
               const result=await client.query(`INSERT INTO judgment_documents(judgment_id,source_path,source_checksum,raw_html,plain_text,parser_version,generation)
-                VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(judgment_id) DO UPDATE SET source_checksum=excluded.source_checksum,raw_html=excluded.raw_html,plain_text=excluded.plain_text,parser_version=excluded.parser_version,generation=excluded.generation,imported_at=now() RETURNING id`,[judgmentId,sourcePath,digest,data.html ?? data.content ?? data.judgment ?? data.text,parsed.plainText,PARSER_VERSION,randomUUID()]);
+                VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(judgment_id) DO UPDATE SET source_checksum=excluded.source_checksum,raw_html=excluded.raw_html,plain_text=excluded.plain_text,parser_version=excluded.parser_version,generation=excluded.generation,imported_at=now() RETURNING id`,[judgmentId,sourcePath,digest,sourceHtml(data),parsed.plainText,PARSER_VERSION,randomUUID()]);
               const documentId=result.rows[0].id;
               await client.query('DELETE FROM judgment_paragraphs WHERE document_id=$1',[documentId]);
               await client.query(`INSERT INTO judgment_paragraphs(document_id,position,label,anchor,block_type,content,html)

@@ -1,4 +1,4 @@
-import { sourceFields, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
+import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
 import { cjkTokens } from "@/lib/cjk";
 import { tool } from "ai";
 import { z } from "zod";
@@ -72,9 +72,7 @@ async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<Judgm
 			judgmentId: hit.judgmentId, chunk_no: hit.chunk_no, neutralCitation: hit.neutralCitation,
 			courtName: hit.courtName, year: hit.year, caseAct: null, caseTitle: hit.parties ?? hit.neutralCitation,
 			parties: hit.parties, snippet: hit.snippet, url: hit.url, rrf_score: hit.rrf_score, rerank_score: null,
-			contentType: hit.contentType, documentId: hit.documentId, languageCode: hit.languageCode,
-			startPosition: hit.startPosition, endPosition: hit.endPosition, startOffset: hit.startOffset,
-			endOffset: hit.endOffset, sourceAnchor: hit.sourceAnchor, spans: hit.spans,
+			...judgmentSourceMetadata(hit),
 		})) };
 	}
 	const terms = fallbackSearchTerms(args.query);
@@ -187,7 +185,7 @@ export const searchJudgmentsTool = tool({
 							results: ranked.map(({ item, rerank_score }) => {
 								const caseSummary = casesByJudgmentId.get(item.judgmentId);
 								return {
-									...Object.fromEntries(Object.keys(sourceFields).map(key => [key, Reflect.get(item,key)])),
+									...judgmentSourceMetadata(item),
 									judgmentId: item.judgmentId,
 									chunk_no: item.chunk_no,
 									neutralCitation: item.neutralCitation,

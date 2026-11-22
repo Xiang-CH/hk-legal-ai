@@ -7,7 +7,7 @@ import { verifyWriteAccess } from './db.mjs';
 import { syncManagedLinks } from './legislation-links.mjs';
 import { walk, parseSourcePath, checksum } from './source.mjs';
 
-const VERSION = 'references-2';
+const VERSION = 'references-3';
 const normalize = value => String(value).normalize('NFC').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim().toUpperCase().replace(/^\[(\d{4})\]\s*(HK[A-Z]+)\s*(\d+)$/, '[$1] $2 $3');
 /** Normalize supported HKLII aliases to a case path while rejecting non-HTTP links. */
 const urlKey = value => {
@@ -140,9 +140,10 @@ export async function resolveReferences({client,root,limit=Infinity,apply=false,
     }
     const locatedUrls=new Set(evidence.filter(item=>item.kind==='url').map(item=>item.original));
     for(const item of inspect(doc.raw_html))if(item.kind==='url'&&!locatedUrls.has(item.original))evidence.push(item);
+    const sourceEvidence = new Set(evidence.flatMap(item => [item.original, item.text].filter(Boolean).map(normalize)));
     const notes = data.noteup_links ?? {};
     for (const original of [...values(notes.judgment?.neutral),...values(notes.judgment?.parallel)]) {
-      evidence.push({kind:'citation',original,method:'noteup',confirmed:evidence.some(_referenceEvidence2=>normalize(_referenceEvidence2.original)===normalize(original) || normalize(_referenceEvidence2.text ?? '')===normalize(original))});
+      evidence.push({kind:'citation',original,method:'noteup',confirmed:sourceEvidence.has(normalize(original))});
     }
     for (const original of values(notes.legis)) evidence.push({kind:'url',original,method:'noteup-legislation'});
     if (apply && batchSize===1) await client.query('BEGIN');

@@ -10,6 +10,10 @@ export const sourceFields = {
  documentId: _schema.string().optional(), languageCode: _schema.string().optional(),
  sourceAnchor: _schema.string().nullable().optional(), spans: _schema.array(span).optional(),
 };
+const sourceMetadata = _schema.object(sourceFields);
+export function judgmentSourceMetadata(hit: _schema.input<typeof sourceMetadata>) {
+ return sourceMetadata.parse(hit);
+}
 const hitSchema = _schema.object({
  judgmentId: _schema.number(), chunk_no: _schema.number(), content: _schema.string(), snippet: _schema.string(),
  neutralCitation: _schema.string().nullable(), courtName: _schema.string().nullable(), year: _schema.number().nullable(),

@@ -135,6 +135,24 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
     case "approval-requested":
       return { label: "Approval required", pending: true, failed: false };
     case "output-available": {
+      const output: unknown = part.output;
+      if (isRecord(output)) {
+        if (typeof output.error === "string") {
+          return {
+            label: part.type === "tool-get_case" ? "Could not read case" : "Search failed",
+            pending: false,
+            failed: true,
+          };
+        }
+        if (part.type === "tool-get_case" && Array.isArray(output.paragraphs)) {
+          const count = output.paragraphs.length;
+          return {
+            label: count === 0 ? "No paragraphs found" : `Read ${count} paragraph${count === 1 ? "" : "s"}`,
+            pending: false,
+            failed: false,
+          };
+        }
+      }
       const count = toolResultCount(part);
       return {
         label: count === null ? "Completed" : `Completed · ${count} result${count === 1 ? "" : "s"}`,
@@ -143,7 +161,11 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
       };
     }
     case "output-error":
-      return { label: "Search failed", pending: false, failed: true };
+      return {
+        label: part.type === "tool-get_case" ? "Could not read case" : "Search failed",
+        pending: false,
+        failed: true,
+      };
     case "output-denied":
       return { label: "Search denied", pending: false, failed: true };
     case "approval-responded":

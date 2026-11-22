@@ -35,7 +35,7 @@ try {
   await client.query('INSERT INTO "_JudgmentToLegislationCap"("A","B") VALUES(1,1)');
   const source = path.join(root,'HKCFI/2020/1');
   await mkdir(source,{recursive:true});
-  await writeFile(path.join(source,'EN.json'),JSON.stringify({content:html,noteup_links:{judgment:{neutral:['[2020] HKCA 2','[2020] HKCA 4'],parallel:[]},legis:['/en/legis/ord/134/','/en/legis/ord/134/s4','/en/legis/reg/336H/s22','/en/legis/ord/999Z/s1']}}));
+  await writeFile(path.join(source,'EN.json'),JSON.stringify({content:html,noteup_links:{judgment:{neutral:['[2020] HKCA 2','[2020] HKCA 4'],parallel:['[2020] HKCA 4']},legis:['/en/legis/ord/134/','/en/legis/ord/134/s4','/en/legis/reg/336H/s22','/en/legis/ord/999Z/s1']}}));
   await writeFile(path.join(source,'tc.json'),JSON.stringify({content:'<body><p><a id="p1">1.</a> 業主有責任支付損害賠償。[2020] HKCA 2</p></body>'}));
   await writeFile(path.join(source,'EN_cit.json'),JSON.stringify(['[2020] 1 HKLRD 100']));
   const auditOutput = execFileSync(process.execPath,['scripts/judgments/audit.mjs','--dir',root],{env:{...process.env,JUDGMENT_DATABASE_URL:databaseUrl},encoding:'utf8',stdio:['ignore','pipe','pipe']});

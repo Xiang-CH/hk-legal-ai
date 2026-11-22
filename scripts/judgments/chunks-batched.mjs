@@ -1,4 +1,4 @@
-import {buildChunks,hash,cjk} from './chunks.mjs';
+import {buildChunks,chunkGeneration,cjk} from './chunks.mjs';
 /** Construct a bounded page from prefetched paragraphs, then atomically publish each page after generation checks. */
 export async function generateChunksBatched({client,limit=64,afterId=0,throughId=null,apply=false,...options}){
  if(!Number.isSafeInteger(limit)||limit<1||limit>128||!Number.isSafeInteger(afterId)||afterId<0)throw Error('Invalid chunk page bounds');
@@ -10,7 +10,7 @@ export async function generateChunksBatched({client,limit=64,afterId=0,throughId
  const model=options.model??'text-embedding-3-large',deployment=options.deployment??process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT??model,version=options.modelVersion??process.env.JUDGMENT_EMBEDDING_VERSION??'1';
  for(const doc of docs){
   const chunks=buildChunks(byDoc.get(String(doc.id))??[],{neutral_citation:doc.neutralCitation,parties:doc.parties},options);
-  const generation=hash(JSON.stringify([String(doc.generation),chunks.map(c=>c.input_checksum),model,deployment,version,'1']));active.push({document_id:doc.id,generation});
+  const generation=chunkGeneration(doc.generation,chunks,model,deployment,version);active.push({document_id:doc.id,generation});
   for(const chunk of chunks){count++;tokens+=chunk.token_count;rows.push({...chunk,document_id:doc.id,judgment_id:doc.judgment_id,document_generation:String(doc.generation),generation,cjk_tokens:cjk(chunk.content),language_code:doc.languageCode,neutral_citation:doc.neutralCitation,court_name:doc.courtName,year:doc.year,date:doc.date,parties:doc.parties,url:doc.url});}
  }
  if(apply){
