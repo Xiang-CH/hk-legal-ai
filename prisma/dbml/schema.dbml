@@ -423,6 +423,38 @@ Table judgment_managed_legislation_links {
   }
 }
 
+Table content_import_jobs {
+  id String [pk]
+  payload Json [not null]
+  createdAt DateTime [default: `now()`, not null]
+  updatedAt DateTime [default: `now()`, not null]
+  chunks content_import_chunks [not null]
+}
+
+Table content_import_chunks {
+  jobId String [not null]
+  nid Int [not null]
+  chunkNo Int [not null]
+  content String [not null]
+  job content_import_jobs [not null]
+
+  indexes {
+    (jobId, nid, chunkNo) [pk]
+  }
+}
+
+Table content_admin_sessions {
+  tokenHash String [pk]
+  keyHash String [not null]
+  expiresAt DateTime [not null]
+}
+
+Table content_admin_login_limits {
+  scope String [pk]
+  attempts Int [not null]
+  resetAt DateTime [not null]
+}
+
 Table ClicPageRelationToClicPage {
   referencingpagesId Int [ref: > ClicPage.id]
   referencedbypagesId Int [ref: > ClicPage.id]
@@ -525,3 +557,5 @@ Ref: judgment_managed_legislation_links.sourceId > Judgment.id [delete: No Actio
 Ref: judgment_managed_legislation_links.capId > LegislationCap.id [delete: No Action]
 
 Ref: judgment_managed_legislation_links.sectionId > LegislationSection.id [delete: No Action]
+
+Ref: content_import_chunks.jobId > content_import_jobs.id [delete: Cascade]
