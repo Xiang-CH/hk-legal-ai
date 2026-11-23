@@ -46,10 +46,16 @@ export const CLIC_TOPIC_ALIASES: Readonly<Record<string, string>> = {
 export type ErrorPayload = { error: string };
 export const errorPayloadSchema = z.strictObject({ error: z.string() });
 
+export class ToolTimeoutError extends Error {
+	constructor(label: string, readonly timeoutMs: number) {
+		super(`[tool] ${label} timed out after ${timeoutMs}ms`);
+	}
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
 	let timer: ReturnType<typeof setTimeout>;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(`[tool] ${label} timed out after ${ms}ms`)), ms);
+		timer = setTimeout(() => reject(new ToolTimeoutError(label, ms)), ms);
 	});
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -59,14 +65,18 @@ export async function withSearchFallback<T>(
 	fallback: () => Promise<T>,
 	label: string,
 	isUsable: (value: T) => boolean = () => true,
+	fallbackBudgetMs = SEARCH_FALLBACK_BUDGET_MS,
+	onFallback?: (event: { reason: "no_usable_result" } | { reason: "timeout" | "error"; error: unknown }) => void,
 ): Promise<T> {
+	let fallbackReason: Parameters<NonNullable<typeof onFallback>>[0] = { reason: "no_usable_result" };
 	try {
 		const result = await withTimeout(primary(), PRIMARY_SEARCH_BUDGET_MS, `${label} primary`);
 		if (isUsable(result)) return result;
-	} catch {
-		/* fall through to the bounded direct lookup */
+	} catch (error) {
+		fallbackReason = { reason: error instanceof ToolTimeoutError ? "timeout" : "error", error };
 	}
-	return await withTimeout(fallback(), SEARCH_FALLBACK_BUDGET_MS, `${label} fallback`);
+	onFallback?.(fallbackReason);
+	return await withTimeout(fallback(), fallbackBudgetMs, `${label} fallback`);
 }
 
 export function summarizeForSpan(value: unknown): unknown {

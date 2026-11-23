@@ -13,7 +13,7 @@ import {
 
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
-import { createChatAgent, createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
+import { createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
 import { createAgenticChatResponse, type TraceCompletion } from "@/lib/agent-stream";
 import { searchTools } from "@/lib/tools";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
@@ -52,6 +52,7 @@ const chatRequestSchema = z.object({
 	agenticSearchEnabled: z.boolean().optional(),
 	// Dev panel override for the system prompt; absent => built-in searchPrompt.
 	systemPrompt: z.string().trim().min(1).max(SYSTEM_PROMPT_MAX_CHARS).optional(),
+	debugJudgmentSearch: z.boolean().optional(),
 	sessionId: correlationIdSchema.optional(),
 	userId: correlationIdSchema.optional(),
 });
@@ -617,7 +618,8 @@ async function handleChatRequest(req: Request): Promise<Response> {
 					try {
 						if (searchMode === "agent") {
 							return await createAgenticChatResponse({
-								agent: createChatAgent(maxSteps, request.systemPrompt),
+								instructions: request.systemPrompt,
+								debugJudgmentSearch: request.debugJudgmentSearch,
 								messages: validated.data,
 								maxSteps,
 								abortSignal: req.signal,

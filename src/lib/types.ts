@@ -105,12 +105,24 @@ const notificationSchema = z.object({
   level: z.enum(["info", "warning", "error"]),
 });
 
+const judgmentSearchDebugSchema = z.object({
+  searchId: z.string(),
+  event: z.string(),
+  elapsedMs: z.number(),
+  details: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()]).optional()),
+});
+
+export type JudgmentSearchDebugEvent = z.infer<typeof judgmentSearchDebugSchema>;
+export type JudgmentSearchDebugSink = (event: JudgmentSearchDebugEvent) => void;
+
 export const chatDataSchemas = {
   notification: notificationSchema,
+  judgmentSearchDebug: judgmentSearchDebugSchema,
 } as const;
 
 type ChatDataParts = {
   notification: z.infer<typeof notificationSchema>;
+  judgmentSearchDebug: JudgmentSearchDebugEvent;
 };
 
 type ChatAgentUIMessage = InferAgentUIMessage<ChatAgent, MyMetadata>;

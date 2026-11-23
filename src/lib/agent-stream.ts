@@ -1,8 +1,8 @@
 import type { InferUIMessageChunk, LanguageModelUsage, TextStreamPart } from "ai";
-import { convertToModelMessages, createUIMessageStreamResponse, toUIMessageStream } from "ai";
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream } from "ai";
 
 import { langfuseSpanProcessor } from "@/instrumentation";
-import type { ChatAgent } from "@/lib/chat-agent";
+import { createChatAgent } from "@/lib/chat-agent";
 import { calculateGpt6LunaCost } from "@/lib/pricing";
 import {
   caseToolOutputSchema,
@@ -13,7 +13,7 @@ import {
   ordinanceSectionToolOutputSchema,
   searchTools,
 } from "@/lib/tools";
-import type { MyMetadata, MyUIMessage } from "@/lib/types";
+import type { JudgmentSearchDebugEvent, JudgmentSearchDebugSink, MyMetadata, MyUIMessage } from "@/lib/types";
 import { z } from "zod";
 
 type ChatChunk = InferUIMessageChunk<MyUIMessage>;
@@ -301,13 +301,15 @@ function toMetadata({
 }
 
 export async function createAgenticChatResponse({
-  agent,
+  instructions,
+  debugJudgmentSearch,
   messages,
   maxSteps,
   abortSignal,
   onTraceComplete,
 }: {
-  agent: ChatAgent;
+  instructions?: string;
+  debugJudgmentSearch?: boolean;
   messages: MyUIMessage[];
   maxSteps: number;
   abortSignal?: AbortSignal;
@@ -321,6 +323,9 @@ export async function createAgenticChatResponse({
   const toolNamesByCallId = new Map<string, SearchToolName>();
   const emittedSourceIds = new Set<string>();
 
+  const pendingDebugEvents: JudgmentSearchDebugEvent[] = [];
+  let emitDebug: JudgmentSearchDebugSink = (entry) => pendingDebugEvents.push(entry);
+  const agent = createChatAgent(maxSteps, instructions, debugJudgmentSearch ? (entry) => emitDebug(entry) : undefined);
   const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
   const result = await agent.stream({
     prompt: modelMessages,
@@ -425,7 +430,16 @@ export async function createAgenticChatResponse({
     }),
   );
 
-  return createUIMessageStreamResponse({ stream: transformed });
+  if (!debugJudgmentSearch) return createUIMessageStreamResponse({ stream: transformed });
+
+  const stream = createUIMessageStream<MyUIMessage>({
+    execute({ writer }) {
+      emitDebug = (entry) => writer.write({ type: "data-judgmentSearchDebug", data: entry, transient: true });
+      pendingDebugEvents.splice(0).forEach(emitDebug);
+      writer.merge(transformed);
+    },
+  });
+  return createUIMessageStreamResponse({ stream });
 }
 
 function isSearchToolName(value: string): value is SearchToolName {

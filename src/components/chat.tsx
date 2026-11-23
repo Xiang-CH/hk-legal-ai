@@ -26,6 +26,12 @@ import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
+declare global {
+  interface Window {
+    debug?: { on: () => void; off: () => void };
+  }
+}
+
 export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnabled: boolean }) {
   const chatId = "001";
   const {
@@ -64,6 +70,27 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     return () => mql.removeEventListener('change', syncFromViewport);
   }, []);
   const { isDevMode } = useDevMode();
+
+  const judgmentSearchDebug = useRef(false);
+  useEffect(() => {
+    const previous = window.debug;
+    const commands = {
+      on() {
+        judgmentSearchDebug.current = true;
+        console.info("[judgment-search] Debug enabled for new requests.");
+      },
+      off() {
+        judgmentSearchDebug.current = false;
+        console.info("[judgment-search] Debug disabled.");
+      },
+    };
+    window.debug = commands;
+    return () => {
+      if (window.debug !== commands) return;
+      if (previous === undefined) delete window.debug;
+      else window.debug = previous;
+    };
+  }, []);
 
   const messageRefs = useRef<Map<string, HTMLElement>>(new Map());
   const hydratedConversation = useRef<string | null>(null);
@@ -111,8 +138,16 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     status,
     stop
   } = useChat<MyUIMessage>({
-    transport: new DefaultChatTransport({ api: routes.apiChat }),
+    transport: new DefaultChatTransport({
+      api: routes.apiChat,
+      body: () => judgmentSearchDebug.current ? { debugJudgmentSearch: true } : {},
+    }),
     throttle: 50,
+    onData: (part) => {
+      if (part.type === "data-judgmentSearchDebug" && judgmentSearchDebug.current) {
+        console.log("[judgment-search]", part.data);
+      }
+    },
     // Resumes the agent after the user answers an ask_question tool call.
     sendAutomaticallyWhen: lastAssistantMessageIsCompleteWithToolCalls,
     onError: (error) => {
