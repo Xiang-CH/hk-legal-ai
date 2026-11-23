@@ -41,6 +41,7 @@ export type LegislationSection = z.infer<typeof legislationSchema>;
 
 const judgmentSummarySchema = z.object({
   judgmentId: z.number(),
+  documentId: z.string().optional(),
   chunk_no: z.number(),
   neutralCitation: z.string(),
   courtName: z.string(),

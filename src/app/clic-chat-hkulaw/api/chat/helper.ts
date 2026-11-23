@@ -126,6 +126,7 @@ export async function* searchJudgmentSummary(query: string, opts: PgSearchOpts) 
     for (const h of hits) {
         yield {
             judgmentId: h.judgmentId,
+            documentId: h.documentId,
             chunk_no: h.chunk_no,
             neutralCitation: h.neutralCitation ?? "",
             courtName: h.courtName ?? "",

@@ -1,10 +1,13 @@
+import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
+import { cjkTokens } from "@/lib/cjk";
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { searchJudgmentChunks, type JudgmentChunkHit } from "@/lib/pg-search";
+import { searchJudgmentChunks, resolveLanguageCodes, type JudgmentChunkHit } from "@/lib/pg-search";
 import { getEmbeddings } from "@/lib/clic-api";
 import {
 	TOOL_TIMEOUT_MS,
+	SEARCH_FALLBACK_BUDGET_MS,
 	RERANK_TOP_JUDGMENT,
 	withTimeout,
 	withToolSpan,
@@ -40,6 +43,7 @@ export interface JudgmentToolItem {
 export const judgmentToolOutputSchema = z.union([
 	z.strictObject({
 		results: z.array(z.strictObject({
+			...sourceFields,
 			judgmentId: z.number(),
 			chunk_no: z.number(),
 			neutralCitation: z.string().nullable(),
@@ -58,7 +62,20 @@ export const judgmentToolOutputSchema = z.union([
 ]);
 export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 
+/** Use lexical full text when available, then preserve summary retrieval if full-text storage or the embedding provider is unavailable. */
 async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<JudgmentToolOutput> {
+	if (fulltextEnabled()) {
+		const hits = await withTimeout(searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)), Math.floor(SEARCH_FALLBACK_BUDGET_MS / 2), 'judgment lexical fallback').catch((error: unknown) => {
+      console.error("Judgment lexical full-text search failed; preserving summary fallback", { message: error instanceof Error ? error.message : "Unknown error" });
+      return [];
+    });
+		if (hits.length) return { results: hits.slice(0, RERANK_TOP_JUDGMENT).map(hit => ({
+			judgmentId: hit.judgmentId, chunk_no: hit.chunk_no, neutralCitation: hit.neutralCitation,
+			courtName: hit.courtName, year: hit.year, caseAct: null, caseTitle: hit.parties ?? hit.neutralCitation,
+			parties: hit.parties, snippet: hit.snippet, url: hit.url, rrf_score: hit.rrf_score, rerank_score: null,
+			...judgmentSourceMetadata(hit),
+		})) };
+	}
 	const terms = fallbackSearchTerms(args.query);
 	const primaryTerm = fallbackPrimaryTerm(terms);
 	// No usable term to constrain the lookup: return nothing rather than
@@ -146,7 +163,7 @@ export const searchJudgmentsTool = tool({
 							embedding,
 							languageCodes: args.languageCode ? [args.languageCode] : undefined,
 						});
-						const unique = dedupe(hits, (h: JudgmentChunkHit) => `${h.judgmentId}:${h.chunk_no}`);
+						const unique = dedupe(hits, (h: JudgmentChunkHit) => `${h.judgmentId}:${h.documentId ?? "summary"}:${h.chunk_no}`);
 						const ranked = await fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT);
 						const judgmentIds = ranked.map(({ item }) => item.judgmentId);
 						const casesByJudgmentId = new Map<number, { caseAct: string; title: string }>();
@@ -169,6 +186,7 @@ export const searchJudgmentsTool = tool({
 							results: ranked.map(({ item, rerank_score }) => {
 								const caseSummary = casesByJudgmentId.get(item.judgmentId);
 								return {
+									...judgmentSourceMetadata(item),
 									judgmentId: item.judgmentId,
 									chunk_no: item.chunk_no,
 									neutralCitation: item.neutralCitation,

@@ -1,0 +1,8 @@
+.git
+node_modules
+.next
+.env*
+.audit
+Clic-chat law conference
+scripts/judgments
+docs
