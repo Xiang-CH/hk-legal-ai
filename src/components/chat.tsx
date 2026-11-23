@@ -14,12 +14,13 @@ import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
 import { useLocalStorage } from "usehooks-ts";
 import { cn } from "@/lib/utils";
+import { assistantDisplayText } from "@/lib/chat-display-text";
 import { deriveTitle, loadMessages, saveMessages } from "@/lib/conversations";
 import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { MyUIMessage } from "@/lib/types";
+import { chatDataSchemas, type MyUIMessage } from "@/lib/types";
 import { routes } from "@/lib/routes";
 import { searchPrompt } from "@/lib/prompts";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
@@ -145,7 +146,11 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     throttle: 50,
     onData: (part) => {
       if (part.type === "data-judgmentSearchDebug" && judgmentSearchDebug.current) {
-        console.log("[judgment-search]", part.data);
+        const parsed = chatDataSchemas.judgmentSearchDebug.safeParse(part.data);
+        if (!parsed.success) return;
+        const { event, elapsedMs, searchId, details } = parsed.data;
+        console.log(`[judgment-search] ${event} · ${details.tool ?? details.stage ?? details.path} · ${elapsedMs}ms`,
+          { searchId, elapsedMs, ...details });
       }
     },
     // Resumes the agent after the user answers an ask_question tool call.
@@ -227,7 +232,10 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const lastMessage = messages[messages.length - 1];
   const lastAssistantMessage = lastMessage?.role === "assistant" ? lastMessage : undefined;
   const lastAssistantHasVisibleContent = lastAssistantMessage?.parts.some((part) => {
-    if (part.type === "text" || part.type === "reasoning") {
+    if (part.type === "text") {
+      return assistantDisplayText(part.text, part.state === "streaming").trim().length > 0;
+    }
+    if (part.type === "reasoning") {
       return part.text.trim().length > 0;
     }
 

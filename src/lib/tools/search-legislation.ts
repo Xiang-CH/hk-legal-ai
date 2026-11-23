@@ -1,4 +1,6 @@
 import { tool } from "ai";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { searchLegislationChunks, type LegislationChunkHit } from "@/lib/pg-search";
@@ -63,14 +65,18 @@ export type LegislationToolOutput = z.infer<typeof legislationToolOutputSchema>;
  * plus the T10 clic-nid graph walk as an internal follow-up capped at depth <= 2:
  * section -> parent Cap title + one level of referencing sections + referencing CLIC nids.
  */
-export const searchLegislationTool = tool({
+export const createSearchLegislationTool = (onDebug?: JudgmentSearchDebugSink) => tool({
 	description:
 		"Find legislation by exact Cap/section numbers or keyword search over section chunks. Exact section lookup returns the provision needed by get_ordinance_section.",
 	inputSchema: searchLegislationInput,
 	outputSchema: legislationToolOutputSchema,
 	execute: async (
 		args: SearchLegislationInput,
+		{ toolCallId },
 	): Promise<LegislationToolOutput> => {
+		const debug = createJudgmentSearchDebug("search_legislation", onDebug, toolCallId);
+		debug.log("start", { toolBudgetMs: TOOL_TIMEOUT_MS, lookup: args.capNumber && args.sectionNumber
+			? "exact_section" : args.keywords?.trim() ? "keywords" : "chapter" });
 		try {
 			return await withTimeout(
 				withToolSpan("tool:search_legislation", args, async () => {
@@ -85,7 +91,7 @@ export const searchLegislationTool = tool({
 						if (!capNumber || !sectionNumber) {
 							return { error: "search_legislation: exact lookup requires capNumber and sectionNumber" };
 						}
-						const direct = await prisma.legislationSection.findMany({
+						const direct = await debug.stage("section_lookup", () => prisma.legislationSection.findMany({
 							where: { capNumber, sectionNumber },
 							select: {
 								id: true,
@@ -98,7 +104,7 @@ export const searchLegislationTool = tool({
 								url: true,
 							},
 							take: 20,
-						});
+						}), (rows) => ({ hitCount: rows.length }));
 						if (direct.length === 0) {
 							return { error: `search_legislation: no sections found for Cap ${capNumber} s.${sectionNumber}` };
 						}
@@ -119,16 +125,17 @@ export const searchLegislationTool = tool({
 							snippet: item.content.slice(0, 240),
 						}));
 					} else if (args.keywords?.trim()) {
-						const embedding = await getEmbeddings(args.keywords);
-						chunks = await searchLegislationChunks(args.keywords, {
+						const keywords = args.keywords;
+						const embedding = await debug.stage("embedding", () => getEmbeddings(keywords));
+						chunks = await debug.stage("hybrid_retrieval", () => searchLegislationChunks(keywords, {
 							embedding,
 							languageCodes: ["en", "sc", "tc"],
-						});
+						}), (rows) => ({ hitCount: rows.length }));
 						if (args.capNumber) chunks = chunks.filter((c) => c.capNumber === args.capNumber);
 						if (args.sectionNumber) chunks = chunks.filter((c) => c.sectionNumber === args.sectionNumber);
 					} else if (args.capNumber) {
 						// No keywords: direct section lookup feeds the graph walk below.
-						const direct = await prisma.legislationSection.findMany({
+						const direct = await debug.stage("section_lookup", () => prisma.legislationSection.findMany({
 							where: {
 								capNumber: args.capNumber,
 								...(args.sectionNumber ? { sectionNumber: args.sectionNumber } : {}),
@@ -144,7 +151,7 @@ export const searchLegislationTool = tool({
 								url: true,
 							},
 							take: 20,
-						});
+						}), (rows) => ({ hitCount: rows.length }));
 						if (direct.length === 0) {
 							return { error: `search_legislation: no sections found for Cap ${args.capNumber}${args.sectionNumber ? ` s.${args.sectionNumber}` : ""}` };
 						}
@@ -167,12 +174,12 @@ export const searchLegislationTool = tool({
 					}
 					const unique = dedupe(chunks, (c) => `${c.sectionId}:${c.chunk_no}`);
 					const rerankQuery = args.keywords?.trim() || `Cap ${args.capNumber ?? ""} s.${args.sectionNumber ?? ""}`;
-					const ranked = await fuseRerank(
+					const ranked = await debug.stage("rerank", () => fuseRerank(
 						rerankQuery,
 						unique,
 						(c) => `${c.heading ?? ""}\n${c.content}`.trim() || `${c.capNumber} s.${c.sectionNumber}`,
 						RERANK_TOP_LEGISLATION,
-					);
+					), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score != null).length }));
 					const results: LegislationToolItem[] = ranked.map(({ item, rerank_score }) => ({
 						sectionId: item.sectionId,
 						chunk_no: item.chunk_no,
@@ -191,7 +198,7 @@ export const searchLegislationTool = tool({
 					let related: { sectionId: number; capNumber: string; sectionNumber: string; heading: string | null }[] = [];
 					let clicNids: number[] = [];
 					if (!isExactSectionLookup && sectionIds.length > 0) {
-						const sections = await prisma.legislationSection.findMany({
+						const sections = await debug.stage("related_sections", () => prisma.legislationSection.findMany({
 							where: { id: { in: sectionIds } },
 							select: {
 								referencingLegislationSections: {
@@ -200,7 +207,7 @@ export const searchLegislationTool = tool({
 								},
 								referencedByClicPages: { select: { nid: true }, take: 5 },
 							},
-						});
+						}), (rows) => ({ hitCount: rows.length }));
 						related = sections.flatMap((s) =>
 							s.referencingLegislationSections.map((r) => ({
 								sectionId: r.id,
@@ -217,7 +224,10 @@ export const searchLegislationTool = tool({
 				"search_legislation",
 			);
 		} catch (err) {
+			debug.log("error", searchErrorDetails(err));
 			return { error: `search_legislation failed: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	},
 });
+
+export const searchLegislationTool = createSearchLegislationTool();

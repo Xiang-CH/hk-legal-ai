@@ -322,6 +322,8 @@ export async function createAgenticChatResponse({
   let outputText = "";
   let streamError: unknown;
   const toolNamesByCallId = new Map<string, SearchToolName>();
+  const toolStartedAt = new Map<string, { at: number; step: number }>();
+  let stepStartedAt = 0;
   const emittedSourceIds = new Set<string>();
 
   const pendingDebugEvents: JudgmentSearchDebugEvent[] = [];
@@ -350,6 +352,46 @@ export async function createAgenticChatResponse({
         }
         if (chunk.type === "finish") {
           usage = chunk.totalUsage;
+        }
+        if (debugJudgmentSearch) {
+          if (chunk.type === "start-step") {
+            stepStartedAt = performance.now();
+            debug.log("step_start", { step: stepCount, toolsAvailable: stepCount < maxSteps });
+          }
+          if (chunk.type === "finish-step") {
+            debug.log("step_end", {
+              step: stepCount,
+              durationMs: Math.round(performance.now() - stepStartedAt),
+              finishReason: chunk.finishReason,
+            });
+          }
+          if (chunk.type === "tool-call") {
+            toolStartedAt.set(chunk.toolCallId, { at: performance.now(), step: stepCount });
+            debug.log("tool_start", { tool: chunk.toolName, toolCallId: chunk.toolCallId, step: stepCount });
+          }
+          if ((chunk.type === "tool-result" && !chunk.preliminary) || chunk.type === "tool-error" || chunk.type === "tool-output-denied") {
+            const start = toolStartedAt.get(chunk.toolCallId);
+            toolStartedAt.delete(chunk.toolCallId);
+            const details = {
+              tool: chunk.toolName,
+              toolCallId: chunk.toolCallId,
+              step: start?.step ?? stepCount,
+              durationMs: start ? Math.round(performance.now() - start.at) : undefined,
+            };
+            if (chunk.type === "tool-error") {
+              debug.log("tool_error", { ...details, ...searchErrorDetails(chunk.error) });
+            } else if (chunk.type === "tool-output-denied") {
+              debug.log("tool_error", { ...details, reason: "denied" });
+            } else {
+              const output: unknown = chunk.output;
+              if (output && typeof output === "object" && "error" in output && typeof output.error === "string") {
+                debug.log("tool_error", { ...details, ...searchErrorDetails(output.error) });
+              } else {
+                const hitCount = toolDebugHitCount(output);
+                debug.log("tool_end", { ...details, hitCount });
+              }
+            }
+          }
         }
         controller.enqueue(chunk);
       },
@@ -451,6 +493,14 @@ export async function createAgenticChatResponse({
     },
   });
   return createUIMessageStreamResponse({ stream });
+}
+
+function toolDebugHitCount(output: unknown): number | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  if ("paragraphs" in output && Array.isArray(output.paragraphs)) return output.paragraphs.length;
+  if ("sections" in output && Array.isArray(output.sections)) return output.sections.length;
+  if ("results" in output && Array.isArray(output.results)) return output.results.length;
+  if ("cases" in output && Array.isArray(output.cases)) return output.cases.length;
 }
 
 function isSearchToolName(value: string): value is SearchToolName {

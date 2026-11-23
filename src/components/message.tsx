@@ -2,12 +2,13 @@
 
 import { motion } from "framer-motion";
 
-import { Check, ChevronDownIcon } from "lucide-react";
+import { Check, ChevronDownIcon, X } from "lucide-react";
 import { SparklesIcon } from "./icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Markdown } from "./markdown";
 import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
+import { assistantDisplayText } from "@/lib/chat-display-text";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import type { MyUIMessage } from "@/lib/types";
 import type { AskQuestionOutput } from "@/lib/tools";
@@ -197,8 +198,10 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
           animate={{ opacity: [0.25, 1, 0.25] }}
           transition={{ duration: 1.2, repeat: Infinity }}
         />
+      ) : state.failed ? (
+        <X className="size-3.5 shrink-0 text-destructive" aria-hidden />
       ) : (
-        <Check className={cn("size-3.5 shrink-0", state.failed && "text-destructive")} />
+        <Check className="size-3.5 shrink-0" aria-hidden />
       )}
       <span className="shrink-0 font-medium">{toolLabels[part.type]}</span>
       {keywords && (
@@ -214,7 +217,7 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
 /** Collapse long tool groups to three recent steps, retaining pending work and an expandable failure summary. */
 function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
   const [open, setOpen] = React.useState(false);
-  const completed = parts.filter((part) => part.state === "output-available").length;
+  const completed = parts.filter((part) => part.state === "output-available" && !toolState(part).failed).length;
   const failed = parts.filter((part) => toolState(part).failed).length;
   const previewParts = [
     ...parts.filter((part) => !toolState(part).pending),
@@ -306,14 +309,19 @@ const PreviewMessage = React.forwardRef<
   const { isDevMode } = useDevMode();
   if (message.parts.length === 0) return null;
 
-  const textParts = message.parts.filter((part) => part.type === "text");
+  const displayParts = message.role === "assistant"
+    ? message.parts.map((part) => part.type === "text"
+      ? { ...part, text: assistantDisplayText(part.text, part.state === "streaming") }
+      : part)
+    : message.parts;
+  const textParts = displayParts.filter((part) => part.type === "text");
   const reasoningParts = message.parts.filter((part) => part.type === "reasoning");
   const fileParts = message.parts.filter((part) => part.type === "file");
   const toolParts = message.parts.filter(isChatToolPart);
   const askQuestionParts = message.parts.filter(isAskQuestionPart);
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
-  const completedToolCount = toolParts.filter((part) => part.state === "output-available").length;
+  const completedToolCount = toolParts.filter((part) => part.state === "output-available" && !toolState(part).failed).length;
   const collapseToolProgress = toolParts.length > 4;
 
   if (message.role === "user" && !hasTextContent) return null;
@@ -330,7 +338,7 @@ const PreviewMessage = React.forwardRef<
   // const urlRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
   // let urlsInContent: { url: string; title: string }[] = [];
 
-  const textContent = message.parts.find(
+  const textContent = displayParts.find(
     (part) => part.type === "text"
   )?.text;
   // if (message.role === "assistant" && textContent) {
@@ -368,7 +376,7 @@ const PreviewMessage = React.forwardRef<
           )}
 
           {message.role === "assistant" &&
-            groupConsecutiveReasoning(message.parts, collapseToolProgress ? toolParts[0]?.toolCallId : undefined).map((item) => {
+            groupConsecutiveReasoning(displayParts, collapseToolProgress ? toolParts[0]?.toolCallId : undefined).map((item) => {
               if (item.kind === "reasoning-group") {
                 return (
                   <ReasoningCard

@@ -160,9 +160,9 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 		"Search Hong Kong judgment summaries (Postgres fusion: lexical + vector, RRF). Returns the final top-8 post-rerank chunks with caseAct and caseTitle identifiers for get_case.",
 	inputSchema: searchJudgmentsInput,
 	outputSchema: judgmentToolOutputSchema,
-	execute: async (args: SearchJudgmentsInput): Promise<JudgmentToolOutput> => {
+	execute: async (args: SearchJudgmentsInput, { toolCallId }): Promise<JudgmentToolOutput> => {
 		const extraFallbackMs = fulltextEnabled() ? JUDGMENT_LEXICAL_FALLBACK_MS : 0;
-		const debug = createJudgmentSearchDebug("search_judgments", onDebug);
+		const debug = createJudgmentSearchDebug("search_judgments", onDebug, toolCallId);
 		debug.log("start", {
 			fulltextEnabled: extraFallbackMs > 0,
 			primaryBudgetMs: PRIMARY_SEARCH_BUDGET_MS,

@@ -121,8 +121,8 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 		"Returns snippets only — call get_ordinance_section / get_case for exact text before quoting.",
 	inputSchema: fullSearchInput,
 	outputSchema: fullSearchOutputSchema,
-	execute: async (args: FullSearchInput): Promise<FullSearchOutput> => {
-		const debug = createJudgmentSearchDebug("full_search", onDebug);
+	execute: async (args: FullSearchInput, { toolCallId }): Promise<FullSearchOutput> => {
+		const debug = createJudgmentSearchDebug("full_search", onDebug, toolCallId);
 		debug.log("start", { toolBudgetMs: FULL_SEARCH_TOOL_TIMEOUT_MS });
 		try {
 			const output = await withTimeout(

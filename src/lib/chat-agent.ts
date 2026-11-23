@@ -4,6 +4,7 @@ import { azure } from "@/lib/clic-api";
 import { searchPrompt } from "@/lib/prompts";
 import { searchTools } from "@/lib/tools";
 import { createFullSearchTool } from "@/lib/tools/full-search";
+import { createSearchLegislationTool } from "@/lib/tools/search-legislation";
 import { createSearchJudgmentsTool } from "@/lib/tools/search-judgments";
 import type { JudgmentSearchDebugSink } from "@/lib/types";
 
@@ -19,6 +20,7 @@ export function createChatAgent(maxSteps: number, instructions: string = searchP
       ? {
           ...searchTools,
           search_judgments: createSearchJudgmentsTool(onJudgmentSearchDebug),
+          search_legislation: createSearchLegislationTool(onJudgmentSearchDebug),
           full_search: createFullSearchTool(onJudgmentSearchDebug),
         }
       : searchTools,
@@ -28,6 +30,7 @@ export function createChatAgent(maxSteps: number, instructions: string = searchP
         ? {
             activeTools: [],
             toolChoice: "none",
+            instructions: `${instructions}\n\nWrite the final answer from the evidence already collected. Tools are unavailable in this step. Keep tool arguments and search requests out of the answer.`,
           }
         : undefined,
     experimental_telemetry: { isEnabled: true },
