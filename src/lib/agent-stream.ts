@@ -2,6 +2,7 @@ import type { InferUIMessageChunk, LanguageModelUsage, TextStreamPart } from "ai
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream } from "ai";
 
 import { langfuseSpanProcessor } from "@/instrumentation";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
 import { createChatAgent } from "@/lib/chat-agent";
 import { calculateGpt6LunaCost } from "@/lib/pricing";
 import {
@@ -325,7 +326,10 @@ export async function createAgenticChatResponse({
 
   const pendingDebugEvents: JudgmentSearchDebugEvent[] = [];
   let emitDebug: JudgmentSearchDebugSink = (entry) => pendingDebugEvents.push(entry);
-  const agent = createChatAgent(maxSteps, instructions, debugJudgmentSearch ? (entry) => emitDebug(entry) : undefined);
+  const debugSink: JudgmentSearchDebugSink | undefined = debugJudgmentSearch ? (entry) => emitDebug(entry) : undefined;
+  const debug = createJudgmentSearchDebug("agent", debugSink);
+  debug.log("request_start");
+  const agent = createChatAgent(maxSteps, instructions, debugSink);
   const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
   const result = await agent.stream({
     prompt: modelMessages,
@@ -411,6 +415,13 @@ export async function createAgenticChatResponse({
               toolCallCount: toolNamesByCallId.size,
               usage,
             }),
+          });
+        }
+        if (debugJudgmentSearch) {
+          debug.log(streamError === undefined ? "request_end" : "request_error", {
+            toolCallCount: toolNamesByCallId.size,
+            judgmentToolRequested: [...toolNamesByCallId.values()].some((name) => name === "search_judgments" || name === "full_search"),
+            ...(streamError === undefined ? {} : searchErrorDetails(streamError)),
           });
         }
         onTraceComplete({

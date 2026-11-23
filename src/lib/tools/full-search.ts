@@ -1,3 +1,5 @@
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import { tool } from "ai";
 import { z } from "zod";
 import { sourceFields, judgmentSourceMetadata } from "@/lib/judgment-fulltext";
@@ -111,7 +113,7 @@ function mergeBestRrf<T>(lists: T[][], key: (item: T) => string, score: (item: T
 	return [...best.values()];
 }
 
-export const fullSearchTool = tool({
+export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool({
 	description:
 		"Broad multi-query search across CLIC articles, judgment summaries, and the legislation graph in a single call. " +
 		"Provide 1-3 related queries (same question from different angles); the tool searches every corpus, pools ALL candidates, reranks them together, and returns the global top 10. " +
@@ -120,8 +122,10 @@ export const fullSearchTool = tool({
 	inputSchema: fullSearchInput,
 	outputSchema: fullSearchOutputSchema,
 	execute: async (args: FullSearchInput): Promise<FullSearchOutput> => {
+		const debug = createJudgmentSearchDebug("full_search", onDebug);
+		debug.log("start", { toolBudgetMs: FULL_SEARCH_TOOL_TIMEOUT_MS });
 		try {
-			return await withTimeout(
+			const output = await withTimeout(
 				withToolSpan("tool:full_search", args, async () => {
 					const searchQueries = args.queries.map((q) => q.trim()).filter((q) => q.length > 0).slice(0, 3);
 					if (searchQueries.length === 0) return { error: "full_search: queries must not be empty" };
@@ -129,7 +133,8 @@ export const fullSearchTool = tool({
 					const searchDepth = args.searchDepth ?? 2;
 
 					// 1. Embed once per query, fan out across CLIC + judgments (no lane filter, like the legacy route).
-					const embeddings = await Promise.all(searchQueries.map((q) => getEmbeddings(q)));
+					const embeddings = await debug.stage("embedding", () => Promise.all(searchQueries.map((q) => getEmbeddings(q))),
+						(results) => ({ queryCount: results.length }));
 					const clicLists = await Promise.all(
 						searchQueries.map((q, i) =>
 							searchClicChunks(q, { embedding: embeddings[i] }).catch((): ClicChunkHit[] => []),
@@ -137,7 +142,8 @@ export const fullSearchTool = tool({
 					);
 					const judgmentLists = await Promise.all(
 						searchQueries.map((q, i) =>
-							searchJudgmentChunks(q, { embedding: embeddings[i] }).catch((): JudgmentChunkHit[] => []),
+							debug.stage("hybrid_retrieval", () => searchJudgmentChunks(q, { embedding: embeddings[i] }, debug),
+								(hits) => ({ queryIndex: i, hitCount: hits.length })).catch((): JudgmentChunkHit[] => []),
 						),
 					);
 
@@ -255,7 +261,7 @@ export const fullSearchTool = tool({
 						ranked = [];
 					} else {
 						try {
-							const reranked = await withTimeout(
+							const reranked = await debug.stage("rerank", () => withTimeout(
 								applyRerank(primaryQuery, pool, {
 									getText: poolText,
 									topN: FULL_SEARCH_TOP_N,
@@ -263,7 +269,7 @@ export const fullSearchTool = tool({
 								}),
 								FULL_SEARCH_RERANK_TIMEOUT_MS,
 								"full_search rerank",
-							);
+							), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score != null).length }));
 							ranked = reranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
 						} catch {
 							// Rerank unavailable: pool is already in fusion order (graph items sink).
@@ -343,8 +349,15 @@ export const fullSearchTool = tool({
 				FULL_SEARCH_TOOL_TIMEOUT_MS,
 				"full_search",
 			);
+			debug.log("end", output.results
+				? { hitCount: output.results.length, judgmentHitCount: output.results.filter((hit) => hit.kind === "judgment").length }
+				: { reason: "invalid_query" });
+			return output;
 		} catch (err) {
+			debug.log("error", searchErrorDetails(err));
 			return { error: `full_search failed: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	},
 });
+
+export const fullSearchTool = createFullSearchTool();

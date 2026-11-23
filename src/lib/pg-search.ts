@@ -16,6 +16,7 @@
  * (In-DB azure_openai.create_embeddings stays an option, but app-side keeps one code
  * path and avoids DB outbound/timeout coupling — see T08 ticket.)
  */
+import type { createJudgmentSearchDebug } from "@/lib/judgment-search-debug";
 import { fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
 import { z } from "zod";
 import { sourceFields } from "@/lib/judgment-fulltext";
@@ -169,14 +170,21 @@ FROM fused f JOIN clic_chunks c ON c.id = f.id`,
 }
 
 /** Q2: judgment_chunks — same shape, no topic filter. */
-export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): Promise<JudgmentChunkHit[]> {
- const fulltextPromise = fulltextEnabled()
-  ? searchFulltext(query,cjkTokens(query),opts.embedding,resolveLanguageCodes(query,opts.languageCodes)).catch((error: unknown) => {
-   console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
-   return [];
-  })
-  : Promise.resolve([]);
-	const summaries = await runFusion<JudgmentChunkHit>({
+export async function searchJudgmentChunks(
+	query: string,
+	opts: PgSearchOpts,
+	debug?: ReturnType<typeof createJudgmentSearchDebug>,
+): Promise<JudgmentChunkHit[]> {
+	const useFulltext = fulltextEnabled();
+	const runFulltext = () => searchFulltext(query, cjkTokens(query), opts.embedding, resolveLanguageCodes(query, opts.languageCodes));
+	const fulltextPromise = useFulltext
+		? (debug?.stage("fulltext_fusion", runFulltext, (hits) => ({ hitCount: hits.length })) ?? runFulltext())
+			.catch((error: unknown) => {
+				console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
+				return [];
+			})
+		: Promise.resolve([]);
+	const runSummaries = () => runFusion<JudgmentChunkHit>({
 		table: "judgment_chunks",
 		query,
 		opts,
@@ -189,8 +197,9 @@ export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): P
        ${snippetSql("c.content")}
 FROM fused f JOIN judgment_chunks c ON c.id = f.id`,
 	});
- if (!fulltextEnabled()) return summaries;
- const fulltext = await fulltextPromise;
+	const summaries = await (debug?.stage("summary_fusion", runSummaries, (hits) => ({ hitCount: hits.length })) ?? runSummaries());
+	if (!useFulltext) return summaries;
+	const fulltext = await fulltextPromise;
  const selected: JudgmentChunkHit[] = [];
  for (const hit of [...summaries,...fulltext].sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
   if(hit.documentId && selected.some(other => other.documentId===hit.documentId && other.startPosition!==undefined && other.endPosition!==undefined && hit.startPosition!==undefined && hit.endPosition!==undefined && other.startPosition<=hit.endPosition && hit.startPosition<=other.endPosition)) continue;

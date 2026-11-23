@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
 import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
 import { cjkTokens } from "@/lib/cjk";
 import { tool } from "ai";
@@ -6,12 +6,11 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { searchJudgmentChunks, resolveLanguageCodes, type JudgmentChunkHit } from "@/lib/pg-search";
 import { getEmbeddings } from "@/lib/clic-api";
-import type { JudgmentSearchDebugEvent, JudgmentSearchDebugSink } from "@/lib/types";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import {
 	TOOL_TIMEOUT_MS,
 	PRIMARY_SEARCH_BUDGET_MS,
 	SEARCH_FALLBACK_BUDGET_MS,
-	ToolTimeoutError,
 	RERANK_TOP_JUDGMENT,
 	withTimeout,
 	withToolSpan,
@@ -29,42 +28,6 @@ const searchJudgmentsInput = z.object({
 });
 type SearchJudgmentsInput = z.infer<typeof searchJudgmentsInput>;
 const JUDGMENT_LEXICAL_FALLBACK_MS = 15_000;
-
-function searchErrorDetails(error: unknown) {
-	const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-	const status = typeof error === "object" && error !== null && "status" in error ? error.status : undefined;
-	return {
-		reason: error instanceof ToolTimeoutError ? "timeout" : "error",
-		timeoutMs: error instanceof ToolTimeoutError ? error.timeoutMs : undefined,
-		code: typeof code === "string" && /^[A-Z0-9_]{1,48}$/.test(code) ? code : undefined,
-		status: typeof status === "number" ? status : undefined,
-	};
-}
-
-function createJudgmentSearchDebug(onDebug?: JudgmentSearchDebugSink) {
-	const searchId = onDebug ? randomUUID() : undefined;
-	const started = performance.now();
-	const log = (event: string, details: JudgmentSearchDebugEvent["details"] = {}) => {
-		if (!searchId) return;
-		const entry = { searchId, event, elapsedMs: Math.round(performance.now() - started), details };
-		console.log("[judgment-search]", entry);
-		onDebug?.(entry);
-	};
-	const stage = async <T>(name: string, run: () => Promise<T>, summarize?: (value: T) => JudgmentSearchDebugEvent["details"]): Promise<T> => {
-		if (!searchId) return run();
-		const stageStarted = performance.now();
-		log("stage_start", { stage: name });
-		try {
-			const value = await run();
-			log("stage_end", { stage: name, durationMs: Math.round(performance.now() - stageStarted), ...summarize?.(value) });
-			return value;
-		} catch (error) {
-			log("stage_error", { stage: name, durationMs: Math.round(performance.now() - stageStarted), ...searchErrorDetails(error) });
-			throw error;
-		}
-	};
-	return { log, stage };
-}
 
 export interface JudgmentToolItem {
 	judgmentId: number;
@@ -199,7 +162,7 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 	outputSchema: judgmentToolOutputSchema,
 	execute: async (args: SearchJudgmentsInput): Promise<JudgmentToolOutput> => {
 		const extraFallbackMs = fulltextEnabled() ? JUDGMENT_LEXICAL_FALLBACK_MS : 0;
-		const debug = createJudgmentSearchDebug(onDebug);
+		const debug = createJudgmentSearchDebug("search_judgments", onDebug);
 		debug.log("start", {
 			fulltextEnabled: extraFallbackMs > 0,
 			primaryBudgetMs: PRIMARY_SEARCH_BUDGET_MS,
@@ -215,7 +178,7 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 						const hits = await debug.stage("hybrid_retrieval", () => searchJudgmentChunks(args.query, {
 							embedding,
 							languageCodes: args.languageCode ? [args.languageCode] : undefined,
-						}), (hits) => ({ hitCount: hits.length, fulltextHitCount: hits.filter((hit) => hit.contentType === "fulltext").length }));
+						}, debug), (hits) => ({ hitCount: hits.length, fulltextHitCount: hits.filter((hit) => hit.contentType === "fulltext").length }));
 						const unique = dedupe(hits, (h: JudgmentChunkHit) => `${h.judgmentId}:${h.documentId ?? "summary"}:${h.chunk_no}`);
 						const ranked = await debug.stage("rerank", () => fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT),
 							(rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score !== null).length }));

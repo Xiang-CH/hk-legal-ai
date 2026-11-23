@@ -119,10 +119,10 @@ export function convertLegislationResultsToXml(legislationResults: LegislationSe
 }
 
 
-export async function* searchJudgmentSummary(query: string, opts: PgSearchOpts) {
+export async function* searchJudgmentSummary(...args: Parameters<typeof searchJudgmentChunks>) {
     // T08: pg fusion over judgment_chunks (same contract notes as searchClic).
     // T09: fusion-only here; global rerank in route.ts (see searchClic note).
-    const hits = await searchJudgmentChunks(query, opts);
+    const hits = await searchJudgmentChunks(...args);
     for (const h of hits) {
         yield {
             judgmentId: h.judgmentId,
