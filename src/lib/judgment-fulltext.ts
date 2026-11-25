@@ -42,15 +42,19 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  FROM current WHERE tsv @@ plainto_tsquery('english',$1)
  OR to_tsvector('simple',cjk_tokens) @@ plainto_tsquery('simple',$2) ORDER BY rank,id LIMIT 15
  ), vec AS (
- -- Keep generation checks as per-candidate lookups so PostgreSQL can scan
- -- chunks in HNSW order without joining and sorting the whole active corpus.
+ -- One per-candidate predicate keeps HNSW available without joining the corpus
+ -- or multiplying the planner's selectivity estimates for the two generations.
  SELECT c.id, c.embedding <=> $3::halfvec AS distance
  FROM judgment_fulltext_chunks c
  WHERE c.embedding IS NOT NULL AND c.status='ready' AND $3::halfvec IS NOT NULL
  AND c.model='text-embedding-3-large' AND c.deployment=$5 AND c.model_version=$6
  AND c.language_code=ANY($4)
- AND c.generation=(SELECT a.generation FROM judgment_fulltext_active a WHERE a.document_id=c.document_id)
- AND c.document_generation=(SELECT d.generation::text FROM judgment_documents d WHERE d.id=c.document_id)
+ AND (
+   SELECT a.generation = c.generation AND d.generation::text = c.document_generation
+   FROM judgment_fulltext_active a
+   JOIN judgment_documents d ON d.id = a.document_id
+   WHERE a.document_id = c.document_id
+ )
  ORDER BY c.embedding <=> $3::halfvec LIMIT 15
  ), vr AS (SELECT *,row_number() OVER(ORDER BY distance,id) AS rank FROM vec)
  SELECT c.judgment_id AS "judgmentId",c.chunk_no,c.content,left(c.content,600) AS snippet,
