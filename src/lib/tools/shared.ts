@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { startActiveObservation } from "@langfuse/tracing";
-import { applyRerank } from "@/lib/rerank";
+import { applyRerank, type RerankFallback } from "@/lib/rerank";
 
 export const TOOL_TIMEOUT_MS = 10_000;
 /** Outer budget for full_search: LLM rewrite + 3 embeddings + fan-out + 2 reranks + graph SQL. */
@@ -109,17 +109,27 @@ export async function fuseRerank<T>(
 	items: T[],
 	getText: (item: T) => string,
 	topN: number,
+	{ timeoutMs = RERANK_TIMEOUT_MS, onFallback }: { timeoutMs?: number; onFallback?: (details: RerankFallback) => void } = {},
 ): Promise<{ item: T; rerank_score: number | null }[]> {
 	const fallback = () => items.slice(0, topN).map((item) => ({ item, rerank_score: null }));
-	if (items.length === 0) return [];
+	if (items.length === 0) {
+		onFallback?.({ reason: "no_candidates" });
+		return [];
+	}
+	let degradation: RerankFallback | undefined;
 	try {
 		const ranked = await withTimeout(
-			applyRerank(query, items, { getText, topN, timeoutMs: RERANK_TIMEOUT_MS }),
-			RERANK_TIMEOUT_MS,
+			applyRerank(query, items, {
+				getText, topN, timeoutMs,
+				onFallback: (details) => { degradation = details; },
+			}),
+			timeoutMs,
 			"rerank",
 		);
+		if (degradation) onFallback?.(degradation);
 		return ranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
-	} catch {
+	} catch (error) {
+		onFallback?.(error instanceof ToolTimeoutError ? { reason: "timeout", timeoutMs } : { reason: "error" });
 		return fallback();
 	}
 }

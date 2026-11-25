@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { after } from "next/server";
 import { randomUUID } from "node:crypto";
-import { createJudgmentSearchDebug } from "@/lib/judgment-search-debug";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import {
 	clientIpFromHeaders,
@@ -118,13 +118,25 @@ async function handleLegacyChat(
 		? inputText
 		: inputText.filter((part) => part.type === "text").map((part) => part.text).join(" ");
 
+	let debug: ReturnType<typeof createJudgmentSearchDebug> | undefined;
+	let terminalReported = false;
+	const reportError = (error: unknown) => {
+		if (!terminalReported) {
+			terminalReported = true;
+			debug?.log("request_error", searchErrorDetails(error));
+		}
+		onTraceComplete({ output: "", error });
+		return "An error occurred.";
+	};
+
 	const stream = createUIMessageStream<MyUIMessage>({
 		execute: async ({ writer }) => {
-			const debug = createJudgmentSearchDebug("legacy", debugJudgmentSearch ? (entry) => {
+			const requestDebug = createJudgmentSearchDebug("legacy", debugJudgmentSearch ? (entry) => {
 				writer.write({ type: "data-judgmentSearchDebug", data: entry, transient: true });
 			} : undefined);
-			debug.log("request_start");
-			const searchQueries = await debug.stage("query_rewrite", () => startActiveObservation("rewrite-query", async (span) => {
+			debug = requestDebug;
+			requestDebug.log("request_start");
+			const searchQueries = await requestDebug.stage("query_rewrite", () => startActiveObservation("rewrite-query", async (span) => {
 				span.update({ input: inputText });
 				const queries = (await rewriteQuery(modelMessages)).slice(0, 3);
 				span.update({ output: queries });
@@ -168,13 +180,15 @@ async function handleLegacyChat(
 				});
 
 				// T08: embed once per rewritten query, share across clic/judgment (/legislation in T10).
-				const queryEmbeddings = await debug.stage("embedding", () => Promise.all(searchQueries.map((q) => getEmbeddings(q))),
-					(results) => ({ queryCount: results.length }));
+				const queryDebug = searchQueries.map((_, index) => requestDebug.forQuery(index));
+				const queryEmbeddings = await Promise.all(searchQueries.map((q, i) =>
+					queryDebug[i].stage("embedding", () => getEmbeddings(q)),
+				));
 
 				const judgmentCandidates: JudgmentSummary[] = [];
 				await Promise.all([
 					...searchQueries.map(async (searchQuery, qi) => {
-						await startActiveObservation("search-clic", async (clicSpan) => {
+						await queryDebug[qi].stage("clic_retrieval", () => startActiveObservation("search-clic", async (clicSpan) => {
 							clicSpan.update({ input: searchQuery });
 							let count = 0;
 							for await (const result of searchClic(searchQuery, { embedding: queryEmbeddings[qi] })) {
@@ -184,13 +198,14 @@ async function handleLegacyChat(
 								count++;
 							}
 							clicSpan.update({ output: { fusionCount: count } });
-						});
+							return count;
+						}), (hitCount) => ({ hitCount }));
 					}),
 					...searchQueries.map(async (searchQuery, qi) => {
-						await debug.stage("hybrid_retrieval", () => startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
+						await queryDebug[qi].stage("hybrid_retrieval", () => startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
 							judgmentSpan.update({ input: searchQuery });
 							let count = 0;
-							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] }, debug)) {
+							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] }, queryDebug[qi])) {
 								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
 								if (!existing) judgmentCandidates.push(result);
 								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
@@ -198,7 +213,7 @@ async function handleLegacyChat(
 							}
 							judgmentSpan.update({ output: { fusionCount: count } });
 							return count;
-						}), (hitCount) => ({ queryIndex: qi, hitCount }));
+						}), (hitCount) => ({ hitCount }));
 					}),
 				]);
 
@@ -211,15 +226,17 @@ async function handleLegacyChat(
 						const out = await applyRerank(rerankQuery, topByRrf(clicCandidates), {
 							getText: (h) => h.content,
 							topN: RERANK_TOP_CLIC,
+							onFallback: (details) => requestDebug.log("rerank_fallback", { ...details, corpus: "clic" }),
 							usage: rerankUsage,
 						});
 						rspan.update({ input: rerankQuery, output: { candidates: Math.min(clicCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
 						return out;
 					}),
-					debug.stage("rerank", () => startActiveObservation("rerank-judgment", async (rspan) => {
+					requestDebug.stage("rerank", () => startActiveObservation("rerank-judgment", async (rspan) => {
 						const out = await applyRerank(rerankQuery, topByRrf(judgmentCandidates), {
 							getText: (h) => h.summary,
 							topN: RERANK_TOP_JUDGMENT,
+							onFallback: (details) => requestDebug.log("rerank_fallback", { ...details, corpus: "judgment" }),
 							usage: rerankUsage,
 						});
 						rspan.update({ input: rerankQuery, output: { candidates: Math.min(judgmentCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
@@ -270,7 +287,7 @@ async function handleLegacyChat(
 					},
 				});
 			});
-			debug.log("retrieval_end", { hitCount: judgmentResults.length });
+			requestDebug.log("retrieval_end", { hitCount: judgmentResults.length });
 			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
 			if (searchDepth > 1) {
@@ -504,19 +521,31 @@ async function handleLegacyChat(
 					},
 				});
 
-			writer.merge(toUIMessageStream({
+			const answer = toUIMessageStream<Record<never, never>, MyUIMessage>({
 				stream: result.stream,
 				sendReasoning: true,
-				onError: (error) => {
-						onTraceComplete({ output: "", error });
-						return "An error occurred.";
-					},
-				}));
+				onError: reportError,
+			});
+			writer.merge(debugJudgmentSearch ? answer.pipeThrough(new TransformStream({
+				transform(chunk, controller) {
+					if (!terminalReported && chunk.type === "finish") {
+						terminalReported = true;
+						requestDebug.log(chunk.finishReason === "error" ? "request_error" : "request_end", {
+							finishReason: chunk.finishReason,
+						});
+					}
+					if (!terminalReported && chunk.type === "abort") {
+						terminalReported = true;
+						requestDebug.log("request_error", { reason: "aborted" });
+					}
+					controller.enqueue(chunk);
+				},
+				flush() {
+					if (!terminalReported) reportError(new Error("Legacy answer stream closed without a finish event"));
+				},
+			})) : answer);
 		},
-		onError: (error) => {
-			onTraceComplete({ output: "", error });
-			return "An error occurred.";
-		},
+		onError: reportError,
 		onEnd: async () => {
 			onTraceComplete({ output: "" });
 			// Critical for serverless: flush traces after the response stream closes.

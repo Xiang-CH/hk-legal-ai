@@ -179,6 +179,7 @@ export const createSearchLegislationTool = (onDebug?: JudgmentSearchDebugSink) =
 						unique,
 						(c) => `${c.heading ?? ""}\n${c.content}`.trim() || `${c.capNumber} s.${c.sectionNumber}`,
 						RERANK_TOP_LEGISLATION,
+						{ onFallback: (details) => debug.log("rerank_fallback", details) },
 					), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score != null).length }));
 					const results: LegislationToolItem[] = ranked.map(({ item, rerank_score }) => ({
 						sectionId: item.sectionId,

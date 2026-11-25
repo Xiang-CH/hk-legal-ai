@@ -11,7 +11,6 @@ import {
 	type JudgmentChunkHit,
 } from "@/lib/pg-search";
 import { getEmbeddings } from "@/lib/clic-api";
-import { applyRerank } from "@/lib/rerank";
 import {
 	TOOL_TIMEOUT_MS,
 	FULL_SEARCH_TOOL_TIMEOUT_MS,
@@ -23,6 +22,7 @@ import {
 	FULL_SEARCH_LEGISLATION_SNIPPET_CHARS,
 	withTimeout,
 	withToolSpan,
+	fuseRerank,
 	errorPayloadSchema,
 } from "./shared";
 
@@ -133,17 +133,20 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 					const searchDepth = args.searchDepth ?? 2;
 
 					// 1. Embed once per query, fan out across CLIC + judgments (no lane filter, like the legacy route).
-					const embeddings = await debug.stage("embedding", () => Promise.all(searchQueries.map((q) => getEmbeddings(q))),
-						(results) => ({ queryCount: results.length }));
+					const queryDebug = searchQueries.map((_, index) => debug.forQuery(index));
+					const embeddings = await Promise.all(searchQueries.map((q, i) =>
+						queryDebug[i].stage("embedding", () => getEmbeddings(q)),
+					));
 					const clicLists = await Promise.all(
 						searchQueries.map((q, i) =>
-							searchClicChunks(q, { embedding: embeddings[i] }).catch((): ClicChunkHit[] => []),
+							queryDebug[i].stage("clic_retrieval", () => searchClicChunks(q, { embedding: embeddings[i] }),
+								(hits) => ({ hitCount: hits.length })).catch((): ClicChunkHit[] => []),
 						),
 					);
 					const judgmentLists = await Promise.all(
 						searchQueries.map((q, i) =>
-							debug.stage("hybrid_retrieval", () => searchJudgmentChunks(q, { embedding: embeddings[i] }, debug),
-								(hits) => ({ queryIndex: i, hitCount: hits.length })).catch((): JudgmentChunkHit[] => []),
+							queryDebug[i].stage("hybrid_retrieval", () => searchJudgmentChunks(q, { embedding: embeddings[i] }, queryDebug[i]),
+								(hits) => ({ hitCount: hits.length })).catch((): JudgmentChunkHit[] => []),
 						),
 					);
 
@@ -256,29 +259,10 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 						if (candidate.kind === "judgment") return candidate.hit.content;
 						return candidate.section.content.slice(0, FULL_SEARCH_RERANK_TEXT_CHARS);
 					};
-					let ranked: { item: FullSearchPoolItem; rerank_score: number | null }[];
-					if (pool.length === 0) {
-						ranked = [];
-					} else {
-						try {
-							const reranked = await debug.stage("rerank", () => withTimeout(
-								applyRerank(primaryQuery, pool, {
-									getText: poolText,
-									topN: FULL_SEARCH_TOP_N,
-									timeoutMs: FULL_SEARCH_RERANK_TIMEOUT_MS,
-								}),
-								FULL_SEARCH_RERANK_TIMEOUT_MS,
-								"full_search rerank",
-							), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score != null).length }));
-							ranked = reranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
-						} catch {
-							// Rerank unavailable: pool is already in fusion order (graph items sink).
-							ranked = [...pool]
-								.sort((a, b) => poolRrf(b) - poolRrf(a))
-								.slice(0, FULL_SEARCH_TOP_N)
-								.map((item) => ({ item, rerank_score: null }));
-						}
-					}
+					const ranked = await debug.stage("rerank", () => fuseRerank(primaryQuery, pool, poolText, FULL_SEARCH_TOP_N, {
+						timeoutMs: FULL_SEARCH_RERANK_TIMEOUT_MS,
+						onFallback: (details) => debug.log("rerank_fallback", details),
+					}), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score !== null).length }));
 					const top = ranked.slice(0, FULL_SEARCH_TOP_N);
 
 					// 5. Attach caseAct/caseTitle identifiers for get_case follow-ups (ranked hits only).

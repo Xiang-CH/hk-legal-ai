@@ -14,7 +14,6 @@ import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
 import { useLocalStorage } from "usehooks-ts";
 import { cn } from "@/lib/utils";
-import { assistantDisplayText } from "@/lib/chat-display-text";
 import { deriveTitle, loadMessages, saveMessages } from "@/lib/conversations";
 import { GroundingsDisplay } from "./groundings-display";
 import { ScrollArea } from "./ui/scroll-area";
@@ -81,7 +80,8 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     };
     Reflect.set(window, "debug", commands);
     return () => {
-      if (Reflect.get(window, "debug") !== commands) return;
+      const installed: unknown = Reflect.get(window, "debug");
+      if (installed !== commands) return;
       if (previous === undefined) Reflect.deleteProperty(window, "debug");
       else Reflect.set(window, "debug", previous);
     };
@@ -224,10 +224,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const lastMessage = messages[messages.length - 1];
   const lastAssistantMessage = lastMessage?.role === "assistant" ? lastMessage : undefined;
   const lastAssistantHasVisibleContent = lastAssistantMessage?.parts.some((part) => {
-    if (part.type === "text") {
-      return assistantDisplayText(part.text, part.state === "streaming").trim().length > 0;
-    }
-    if (part.type === "reasoning") {
+    if (part.type === "text" || part.type === "reasoning") {
       return part.text.trim().length > 0;
     }
 

@@ -18,14 +18,15 @@ function renderMessage(parts: MyUIMessage["parts"], role: MyUIMessage["role"] = 
   ));
 }
 
-test("stray tool arguments do not appear in the assistant answer", () => {
+test("assistant text preserves standalone and partial JSON as it streams", () => {
   const html = renderMessage([
     { type: "text", text: callArguments },
     { type: "text", text: `${callArguments}\n\nAnswer based on the sources.` },
     { type: "text", text: '{"que', state: "streaming" },
   ]);
   assert.match(html, /Answer based on the sources/);
-  assert.doesNotMatch(html, /search-only-marker|&quot;que/);
+  assert.match(html, /search-only-marker/);
+  assert.match(html, /&quot;que/);
 });
 
 test("fenced JSON examples and user input remain visible", () => {

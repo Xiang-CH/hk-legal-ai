@@ -192,7 +192,7 @@ FROM fused f JOIN clic_chunks c ON c.id = f.id`,
 export async function searchJudgmentChunks(
 	query: string,
 	opts: PgSearchOpts,
-	debug?: ReturnType<typeof createJudgmentSearchDebug>,
+	debug?: Pick<ReturnType<typeof createJudgmentSearchDebug>, "stage">,
 ): Promise<JudgmentChunkHit[]> {
 	const useFulltext = fulltextEnabled();
 	const runFulltext = () => searchFulltext(query, cjkTokens(query), opts.embedding, resolveLanguageCodes(query, opts.languageCodes));

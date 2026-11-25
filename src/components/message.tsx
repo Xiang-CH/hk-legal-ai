@@ -8,7 +8,6 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collap
 import { Markdown } from "./markdown";
 import { PreviewAttachment } from "./preview-attachment";
 import { cn } from "@/lib/utils";
-import { assistantDisplayText } from "@/lib/chat-display-text";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import type { MyUIMessage } from "@/lib/types";
 import type { AskQuestionOutput } from "@/lib/tools";
@@ -309,12 +308,7 @@ const PreviewMessage = React.forwardRef<
   const { isDevMode } = useDevMode();
   if (message.parts.length === 0) return null;
 
-  const displayParts = message.role === "assistant"
-    ? message.parts.map((part) => part.type === "text"
-      ? { ...part, text: assistantDisplayText(part.text, part.state === "streaming") }
-      : part)
-    : message.parts;
-  const textParts = displayParts.filter((part) => part.type === "text");
+  const textParts = message.parts.filter((part) => part.type === "text");
   const reasoningParts = message.parts.filter((part) => part.type === "reasoning");
   const fileParts = message.parts.filter((part) => part.type === "file");
   const toolParts = message.parts.filter(isChatToolPart);
@@ -338,7 +332,7 @@ const PreviewMessage = React.forwardRef<
   // const urlRegex = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g;
   // let urlsInContent: { url: string; title: string }[] = [];
 
-  const textContent = displayParts.find(
+  const textContent = message.parts.find(
     (part) => part.type === "text"
   )?.text;
   // if (message.role === "assistant" && textContent) {
@@ -376,7 +370,7 @@ const PreviewMessage = React.forwardRef<
           )}
 
           {message.role === "assistant" &&
-            groupConsecutiveReasoning(displayParts, collapseToolProgress ? toolParts[0]?.toolCallId : undefined).map((item) => {
+            groupConsecutiveReasoning(message.parts, collapseToolProgress ? toolParts[0]?.toolCallId : undefined).map((item) => {
               if (item.kind === "reasoning-group") {
                 return (
                   <ReasoningCard

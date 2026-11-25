@@ -3,6 +3,7 @@ import { ToolLoopAgent, stepCountIs } from "ai";
 import { azure } from "@/lib/clic-api";
 import { searchPrompt } from "@/lib/prompts";
 import { searchTools } from "@/lib/tools";
+import { createSearchClicTool } from "@/lib/tools/search-clic";
 import { createFullSearchTool } from "@/lib/tools/full-search";
 import { createSearchLegislationTool } from "@/lib/tools/search-legislation";
 import { createSearchJudgmentsTool } from "@/lib/tools/search-judgments";
@@ -19,6 +20,7 @@ export function createChatAgent(maxSteps: number, instructions: string = searchP
     tools: onJudgmentSearchDebug
       ? {
           ...searchTools,
+          search_clic: createSearchClicTool(onJudgmentSearchDebug),
           search_judgments: createSearchJudgmentsTool(onJudgmentSearchDebug),
           search_legislation: createSearchLegislationTool(onJudgmentSearchDebug),
           full_search: createFullSearchTool(onJudgmentSearchDebug),

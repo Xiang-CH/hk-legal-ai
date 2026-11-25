@@ -47,10 +47,12 @@ export function createRerankUsage(): RerankUsage {
 	return { calls: 0, documents: 0, succeeded: 0 };
 }
 
-interface CohereRerankResult {
-	index: number;
-	relevance_score: number;
-}
+export type RerankFallback =
+	| { reason: "disabled" | "no_candidates" | "empty_query" | "missing_config" | "invalid_response" | "network_error" | "error" }
+	| { reason: "http_error"; status: number; retries: number }
+	| { reason: "timeout"; timeoutMs: number };
+
+type RerankFallbackListener = (fallback: RerankFallback) => void;
 
 /**
  * Score `documents` against `query`. Returns index -> {rank (1-based), score},
@@ -59,14 +61,20 @@ interface CohereRerankResult {
 export async function rerankScores(
 	query: string,
 	documents: string[],
-	opts?: { topN?: number; timeoutMs?: number; usage?: RerankUsage },
+	opts?: { topN?: number; timeoutMs?: number; usage?: RerankUsage; onFallback?: RerankFallbackListener },
 ): Promise<Map<number, { rank: number; score: number }> | null> {
-	if (!isRerankEnabled() || documents.length === 0 || !query.trim()) return null;
+	const fallback = (details: RerankFallback): null => {
+		opts?.onFallback?.(details);
+		return null;
+	};
+	if (!isRerankEnabled()) return fallback({ reason: "disabled" });
+	if (documents.length === 0) return fallback({ reason: "no_candidates" });
+	if (!query.trim()) return fallback({ reason: "empty_query" });
 	const endpoint = process.env.RERANK_ENDPOINT;
 	const key = process.env.RERANK_KEY;
 	if (!endpoint || !key) {
 		console.warn("[rerank] RERANK_ENABLED but RERANK_ENDPOINT/KEY missing — fusion fallback");
-		return null;
+		return fallback({ reason: "missing_config" });
 	}
 	if (opts?.usage) {
 		opts.usage.calls++;
@@ -79,9 +87,10 @@ export async function rerankScores(
 		documents: documents.map((d) => d.slice(0, MAX_DOC_CHARS)),
 		top_n: topN,
 	});
+	const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	for (let attempt = 0; ; attempt++) {
 		const controller = new AbortController();
-		const timer = setTimeout(() => controller.abort(), opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
 		try {
 			const res = await fetch(endpoint, {
 				method: "POST",
@@ -97,7 +106,7 @@ export async function rerankScores(
 			if (res.status === 429 || (res.status >= 500 && res.status < 600)) {
 					if (attempt >= MAX_RETRIES) {
 						console.warn(`[rerank] HTTP ${res.status} after ${attempt} retries — fusion fallback`);
-						return null;
+						return fallback({ reason: "http_error", status: res.status, retries: attempt });
 					}
 					// Honor Retry-After (seconds) when present, else exponential backoff.
 					const retryAfter = Number(res.headers.get("retry-after"));
@@ -111,20 +120,33 @@ export async function rerankScores(
 			}
 			if (!res.ok) {
 				console.warn(`[rerank] HTTP ${res.status} — fusion fallback`);
-				return null;
+				return fallback({ reason: "http_error", status: res.status, retries: attempt });
 			}
-			const data = (await res.json()) as { results?: CohereRerankResult[] };
-			if (!Array.isArray(data.results)) {
+			const data: unknown = await res.json();
+			const results = data && typeof data === "object" && "results" in data ? data.results : undefined;
+			if (!Array.isArray(results) || results.length === 0) {
 				console.warn("[rerank] unexpected response shape — fusion fallback");
-				return null;
+				return fallback({ reason: "invalid_response" });
 			}
 			const map = new Map<number, { rank: number; score: number }>();
-			data.results.forEach((r, rank) => map.set(r.index, { rank: rank + 1, score: r.relevance_score }));
+			for (const [rank, row] of results.entries()) {
+				const result: unknown = row;
+				if (!result || typeof result !== "object" ||
+					!("index" in result) || typeof result.index !== "number" ||
+					!Number.isInteger(result.index) || result.index < 0 || result.index >= documents.length ||
+					!("relevance_score" in result) || typeof result.relevance_score !== "number" ||
+					!Number.isFinite(result.relevance_score) || map.has(result.index)) {
+					return fallback({ reason: "invalid_response" });
+				}
+				map.set(result.index, { rank: rank + 1, score: result.relevance_score });
+			}
 			if (opts?.usage) opts.usage.succeeded++;
 			return map;
 		} catch (err) {
 			console.warn("[rerank] failed, fusion fallback:", err);
-			return null;
+			if (controller.signal.aborted) return fallback({ reason: "timeout", timeoutMs });
+			if (err instanceof SyntaxError) return fallback({ reason: "invalid_response" });
+			return fallback({ reason: "network_error" });
 		} finally {
 			clearTimeout(timer);
 		}
@@ -139,12 +161,12 @@ export async function rerankScores(
 export async function applyRerank<T>(
 	query: string,
 	items: T[],
-	opts: { getText: (item: T) => string; topN: number; timeoutMs?: number; usage?: RerankUsage },
+	opts: { getText: (item: T) => string; topN: number; timeoutMs?: number; usage?: RerankUsage; onFallback?: RerankFallbackListener },
 ): Promise<{ item: T; rerank_score?: number }[]> {
 	const scores = await rerankScores(
 		query,
 		items.map(opts.getText),
-		{ topN: Math.min(opts.topN, items.length), timeoutMs: opts.timeoutMs, usage: opts.usage },
+		{ topN: Math.min(opts.topN, items.length), timeoutMs: opts.timeoutMs, usage: opts.usage, onFallback: opts.onFallback },
 	);
 	if (!scores) return items.slice(0, opts.topN).map((item) => ({ item }));
 	return [...items.keys()]

@@ -180,7 +180,9 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 							languageCodes: args.languageCode ? [args.languageCode] : undefined,
 						}, debug), (hits) => ({ hitCount: hits.length, fulltextHitCount: hits.filter((hit) => hit.contentType === "fulltext").length }));
 						const unique = dedupe(hits, (h: JudgmentChunkHit) => `${h.judgmentId}:${h.documentId ?? "summary"}:${h.chunk_no}`);
-						const ranked = await debug.stage("rerank", () => fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT),
+						const ranked = await debug.stage("rerank", () => fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT, {
+							onFallback: (details) => debug.log("rerank_fallback", details),
+						}),
 							(rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score !== null).length }));
 						const judgmentIds = ranked.map(({ item }) => item.judgmentId);
 						const casesByJudgmentId = new Map<number, { caseAct: string; title: string }>();
