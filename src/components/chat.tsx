@@ -27,12 +27,6 @@ import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch";
 
-declare global {
-  interface Window {
-    debug?: { on: () => void; off: () => void };
-  }
-}
-
 export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnabled: boolean }) {
   const chatId = "001";
   const {
@@ -74,7 +68,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
 
   const judgmentSearchDebug = useRef(false);
   useEffect(() => {
-    const previous = window.debug;
+    const previous: unknown = Reflect.get(window, "debug");
     const commands = {
       on() {
         judgmentSearchDebug.current = true;
@@ -85,11 +79,11 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
         console.info("[judgment-search] Debug disabled.");
       },
     };
-    window.debug = commands;
+    Reflect.set(window, "debug", commands);
     return () => {
-      if (window.debug !== commands) return;
-      if (previous === undefined) delete window.debug;
-      else window.debug = previous;
+      if (Reflect.get(window, "debug") !== commands) return;
+      if (previous === undefined) Reflect.deleteProperty(window, "debug");
+      else Reflect.set(window, "debug", previous);
     };
   }, []);
 
@@ -111,6 +105,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     maxSteps,
     sessionId,
     agenticSearchEnabled,
+    ...(judgmentSearchDebug.current ? { debugJudgmentSearch: true } : {}),
     ...(systemPrompt.trim() &&
     systemPrompt !== searchPrompt &&
     systemPrompt.length <= SYSTEM_PROMPT_MAX_CHARS
@@ -139,10 +134,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     status,
     stop
   } = useChat<MyUIMessage>({
-    transport: new DefaultChatTransport({
-      api: routes.apiChat,
-      body: () => judgmentSearchDebug.current ? { debugJudgmentSearch: true } : {},
-    }),
+    transport: new DefaultChatTransport({ api: routes.apiChat }),
     throttle: 50,
     onData: (part) => {
       if (part.type === "data-judgmentSearchDebug" && judgmentSearchDebug.current) {

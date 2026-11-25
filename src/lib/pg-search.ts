@@ -141,7 +141,7 @@ async function runFusion<T>(args: {
 		if (langs.some((lang) => lang !== "en")) branches.push(`
   SELECT id, ${cjkScore} AS score
   FROM legislation_chunks
-  WHERE language_code = ANY(array_remove($4, 'en')) AND ${cjkMatch}`);
+  WHERE language_code = ANY(array_remove($4::text[], 'en')) AND ${cjkMatch}`);
 		lexicalMatches = branches.join("\n  UNION ALL\n");
 	}
 	// NOTE: explicit ::int / ::float8 casts — raw numeric/bigint come back from pg as
