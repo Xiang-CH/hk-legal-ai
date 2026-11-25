@@ -18,7 +18,7 @@ async function main() {
    await client.query('LOCK TABLE judgment_fulltext_chunks IN ACCESS EXCLUSIVE MODE');
    const hits = await withTimeout(
     searchJudgmentChunks('landlord',{embedding,languageCodes:['en']}),
-    9_000,
+    12_000,
     'summary fallback while full-text is locked',
    );
    assert(hits.some(hit=>hit.judgmentId===1 && !hit.documentId && hit.content.includes('Legacy landlord')));

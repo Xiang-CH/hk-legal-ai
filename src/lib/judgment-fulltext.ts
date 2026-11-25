@@ -27,10 +27,10 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  if (embedding && (embedding.length !== 3072 || !embedding.every(Number.isFinite))) throw new Error("Invalid query embedding");
  const rows = await prisma.$transaction(async (tx) => {
   // Bound the database work so summary retrieval can recover from a slow plan or lock.
-  await tx.$executeRaw`SET LOCAL statement_timeout = '5s'`;
-  if (embedding) {
-   await tx.$executeRaw`SET LOCAL hnsw.iterative_scan = 'strict_order'`;
-  }
+  await tx.$queryRaw`
+   SELECT set_config('statement_timeout', '8s', true) AS statement_timeout,
+          set_config('hnsw.iterative_scan', 'strict_order', true) AS iterative_scan
+  `;
   return tx.$queryRawUnsafe<unknown>(`
  WITH current AS NOT MATERIALIZED (
  SELECT c.* FROM judgment_fulltext_chunks c
@@ -71,7 +71,7 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
  ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
- }, { maxWait: 1_500, timeout: 6_500 });
+ }, { maxWait: 1_500, timeout: 11_000 });
  return _schema.array(hitSchema).parse(rows).map(hit => {
  const url=hit.url?new URL(hit.url,"https://hklii.hk"):null;
  if(url && hit.sourceAnchor)url.hash=hit.sourceAnchor.replace(/^#/, "");
