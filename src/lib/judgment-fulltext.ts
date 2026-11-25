@@ -25,7 +25,13 @@ const hitSchema = _schema.object({
 /** Search only active current-generation chunks, combining lexical ranking with an optional caller-supplied embedding. */
 export async function searchFulltext(query: string, tokens: string, embedding: number[] | null, languages: string[]) {
  if (embedding && (embedding.length !== 3072 || !embedding.every(Number.isFinite))) throw new Error("Invalid query embedding");
- const rows = await prisma.$queryRawUnsafe<unknown>(`
+ const rows = await prisma.$transaction(async (tx) => {
+  // Bound the database work so summary retrieval can recover from a slow plan or lock.
+  await tx.$executeRaw`SET LOCAL statement_timeout = '5s'`;
+  if (embedding) {
+   await tx.$executeRaw`SET LOCAL hnsw.iterative_scan = 'strict_order'`;
+  }
+  return tx.$queryRawUnsafe<unknown>(`
  WITH current AS NOT MATERIALIZED (
  SELECT c.* FROM judgment_fulltext_chunks c
  JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation
@@ -36,9 +42,16 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  FROM current WHERE tsv @@ plainto_tsquery('english',$1)
  OR to_tsvector('simple',cjk_tokens) @@ plainto_tsquery('simple',$2) ORDER BY rank,id LIMIT 15
  ), vec AS (
- SELECT id, embedding <=> $3::halfvec AS distance FROM current WHERE embedding IS NOT NULL AND status='ready' AND $3::halfvec IS NOT NULL
- AND model='text-embedding-3-large' AND deployment=$5 AND model_version=$6
- ORDER BY embedding <=> $3::halfvec LIMIT 15
+ -- Keep generation checks as per-candidate lookups so PostgreSQL can scan
+ -- chunks in HNSW order without joining and sorting the whole active corpus.
+ SELECT c.id, c.embedding <=> $3::halfvec AS distance
+ FROM judgment_fulltext_chunks c
+ WHERE c.embedding IS NOT NULL AND c.status='ready' AND $3::halfvec IS NOT NULL
+ AND c.model='text-embedding-3-large' AND c.deployment=$5 AND c.model_version=$6
+ AND c.language_code=ANY($4)
+ AND c.generation=(SELECT a.generation FROM judgment_fulltext_active a WHERE a.document_id=c.document_id)
+ AND c.document_generation=(SELECT d.generation::text FROM judgment_documents d WHERE d.id=c.document_id)
+ ORDER BY c.embedding <=> $3::halfvec LIMIT 15
  ), vr AS (SELECT *,row_number() OVER(ORDER BY distance,id) AS rank FROM vec)
  SELECT c.judgment_id AS "judgmentId",c.chunk_no,c.content,left(c.content,600) AS snippet,
  c.neutral_citation AS "neutralCitation",c.court_name AS "courtName",c.year,to_char(c.date AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS date,c.parties,
@@ -54,6 +67,7 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
  ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
+ }, { maxWait: 1_500, timeout: 6_500 });
  return _schema.array(hitSchema).parse(rows).map(hit => {
  const url=hit.url?new URL(hit.url,"https://hklii.hk"):null;
  if(url && hit.sourceAnchor)url.hash=hit.sourceAnchor.replace(/^#/, "");
