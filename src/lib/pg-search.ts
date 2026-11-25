@@ -2,9 +2,8 @@
  * T08 — Postgres fusion search (pgvector + FTS + pg_trgm, RRF).
  *
  * Single Azure PG Flexible Server replaces Azure AI Search (index lost, rebuilt from source).
- * Ported from tickets/T08-fusion-draft.sql, generalized so ONE round-trip covers mixed
- * language lanes: `language_code = ANY($langs)` with per-row CASE on `language_code`
- * (instead of one query per ($lang) like the draft).
+ * Ported from tickets/T08-fusion-draft.sql. One round-trip covers all
+ * requested languages.
  *
  * Per (query × corpus): lexical LIMIT 15 + vector LIMIT 15 -> RRF 1/(60+rank) -> top-30,
  * snippet via ts_headline (lexical hits) / left(content,300) (vector-only hits).
@@ -111,24 +110,44 @@ async function runFusion<T>(args: {
 		params.push(args.opts.topics);
 		topicClause = `AND topic = ANY($${params.length})`;
 	}
-	// NOTE: explicit ::int / ::float8 casts — raw numeric/bigint come back from pg as
-	// string/bigint and would break JSON serialization downstream.
-	const sql = `
-WITH lex AS (
+	const englishQuery = "plainto_tsquery('english', $1)";
+	const cjkQuery = "plainto_tsquery('simple', $2)";
+	const cjkVector = "to_tsvector('simple', cjk_tokens)";
+	const englishScore = `ts_rank(tsv, ${englishQuery})`;
+	const cjkScore = `0.7 * ts_rank(${cjkVector}, ${cjkQuery}) + 0.3 * similarity(cjk_tokens, $2)`;
+	const englishMatch = `tsv @@ ${englishQuery}`;
+	const cjkMatch = `(${cjkVector} @@ ${cjkQuery} OR cjk_tokens % $2)`;
+	let lexicalMatches = `
   SELECT id,
          CASE WHEN language_code = 'en'
-           THEN ts_rank(tsv, plainto_tsquery('english', $1))
-           ELSE 0.7 * ts_rank(to_tsvector('simple', cjk_tokens), plainto_tsquery('simple', $2))
-              + 0.3 * similarity(cjk_tokens, $2)
+           THEN ${englishScore}
+           ELSE ${cjkScore}
          END AS score
   FROM ${args.table}
   WHERE language_code = ANY($4)
     AND (CASE WHEN language_code = 'en'
-      THEN tsv @@ plainto_tsquery('english', $1)
-      ELSE to_tsvector('simple', cjk_tokens) @@ plainto_tsquery('simple', $2)
-        OR cjk_tokens % $2
+      THEN ${englishMatch}
+      ELSE ${cjkMatch}
     END)
-  ${topicClause}
+  ${topicClause}`;
+	if (args.table === "legislation_chunks") {
+		// Expose the English predicate to the GIN planner. Apply the limit
+		// after combining the language branches so they still compete by score.
+		const branches: string[] = [];
+		if (langs.includes("en")) branches.push(`
+  SELECT id, ${englishScore} AS score
+  FROM legislation_chunks
+  WHERE language_code = 'en' AND ${englishMatch}`);
+		if (langs.some((lang) => lang !== "en")) branches.push(`
+  SELECT id, ${cjkScore} AS score
+  FROM legislation_chunks
+  WHERE language_code = ANY(array_remove($4, 'en')) AND ${cjkMatch}`);
+		lexicalMatches = branches.join("\n  UNION ALL\n");
+	}
+	// NOTE: explicit ::int / ::float8 casts — raw numeric/bigint come back from pg as
+	// string/bigint and would break JSON serialization downstream.
+	const sql = `
+WITH lex AS (${lexicalMatches}
   ORDER BY score DESC
   LIMIT ${LEX_LIMIT}
 ),
