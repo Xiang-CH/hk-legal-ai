@@ -8,7 +8,7 @@ import { useScroll } from "@/hooks/use-scroll-to-bottom";
 import { useDevMode } from "@/hooks/use-dev-mode";
 import { useConversations } from "@/hooks/use-conversations";
 import { useChat } from '@ai-sdk/react'
-import { DefaultChatTransport, lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
+import { lastAssistantMessageIsCompleteWithToolCalls } from 'ai'
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelLeftOpen, Plus } from "lucide-react";
@@ -20,7 +20,7 @@ import { ScrollArea } from "./ui/scroll-area";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { chatDataSchemas, type MyUIMessage } from "@/lib/types";
-import { routes } from "@/lib/routes";
+import { createChatTransport } from "@/lib/chat-transport";
 import { searchPrompt } from "@/lib/prompts";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import { Slider } from "@/components/ui/slider"
@@ -66,6 +66,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
   const { isDevMode } = useDevMode();
 
   const judgmentSearchDebug = useRef(false);
+  const [transport] = useState(() => createChatTransport(() => judgmentSearchDebug.current));
   useEffect(() => {
     const previous: unknown = Reflect.get(window, "debug");
     const commands = {
@@ -75,7 +76,7 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
       },
       off() {
         judgmentSearchDebug.current = false;
-        console.info("[judgment-search] Debug disabled.");
+        console.info("[judgment-search] Debug disabled for new requests.");
       },
     };
     Reflect.set(window, "debug", commands);
@@ -105,7 +106,6 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     maxSteps,
     sessionId,
     agenticSearchEnabled,
-    ...(judgmentSearchDebug.current ? { debugJudgmentSearch: true } : {}),
     ...(systemPrompt.trim() &&
     systemPrompt !== searchPrompt &&
     systemPrompt.length <= SYSTEM_PROMPT_MAX_CHARS
@@ -134,10 +134,10 @@ export function Chat({ defaultAgenticSearchEnabled }: { defaultAgenticSearchEnab
     status,
     stop
   } = useChat<MyUIMessage>({
-    transport: new DefaultChatTransport({ api: routes.apiChat }),
+    transport,
     throttle: 50,
     onData: (part) => {
-      if (part.type === "data-judgmentSearchDebug" && judgmentSearchDebug.current) {
+      if (part.type === "data-judgmentSearchDebug") {
         const parsed = chatDataSchemas.judgmentSearchDebug.safeParse(part.data);
         if (!parsed.success) return;
         const { event, elapsedMs, searchId, details } = parsed.data;

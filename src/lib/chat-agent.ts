@@ -2,11 +2,7 @@ import { ToolLoopAgent, stepCountIs } from "ai";
 
 import { azure } from "@/lib/clic-api";
 import { searchPrompt } from "@/lib/prompts";
-import { searchTools } from "@/lib/tools";
-import { createSearchClicTool } from "@/lib/tools/search-clic";
-import { createFullSearchTool } from "@/lib/tools/full-search";
-import { createSearchLegislationTool } from "@/lib/tools/search-legislation";
-import { createSearchJudgmentsTool } from "@/lib/tools/search-judgments";
+import { createSearchTools, searchTools } from "@/lib/tools";
 import type { JudgmentSearchDebugSink } from "@/lib/types";
 
 export const DEFAULT_AGENT_MAX_STEPS = 5;
@@ -17,15 +13,7 @@ export function createChatAgent(maxSteps: number, instructions: string = searchP
     model: azure(process.env.LLM_MODEL || "gpt-5.4-mini"),
     instructions,
     allowSystemInMessages: true,
-    tools: onJudgmentSearchDebug
-      ? {
-          ...searchTools,
-          search_clic: createSearchClicTool(onJudgmentSearchDebug),
-          search_judgments: createSearchJudgmentsTool(onJudgmentSearchDebug),
-          search_legislation: createSearchLegislationTool(onJudgmentSearchDebug),
-          full_search: createFullSearchTool(onJudgmentSearchDebug),
-        }
-      : searchTools,
+    tools: onJudgmentSearchDebug ? createSearchTools(onJudgmentSearchDebug) : searchTools,
     stopWhen: stepCountIs(maxSteps),
     prepareStep: ({ stepNumber }) =>
       stepNumber >= maxSteps - 1

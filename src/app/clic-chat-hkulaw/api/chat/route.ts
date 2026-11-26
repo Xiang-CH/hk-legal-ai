@@ -2,7 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { after } from "next/server";
 import { randomUUID } from "node:crypto";
-import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { createJudgmentSearchDebug, createSearchRequestTerminal, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { retrieveSearchQueries } from "@/lib/search-fanout";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import {
 	clientIpFromHeaders,
@@ -102,12 +103,19 @@ function resolveMaxSteps(requested: number | undefined): number {
  * We handle timeouts per-query instead of using prisma.$use middleware.
  */
 
+async function collectSearchHits<T>(items: AsyncIterable<T>): Promise<T[]> {
+	const hits: T[] = [];
+	for await (const item of items) hits.push(item);
+	return hits;
+}
+
 async function handleLegacyChat(
 	messages: MyUIMessage[],
 	searchDepth: number,
 	onTraceComplete: TraceCompletion,
 	instructions?: string,
 	debugJudgmentSearch?: boolean,
+	abortSignal?: AbortSignal,
 ) {
 	// Build the model input and the retrieval query from the latest user message.
 	const modelMessages = await convertToModelMessages(messages);
@@ -118,13 +126,9 @@ async function handleLegacyChat(
 		? inputText
 		: inputText.filter((part) => part.type === "text").map((part) => part.text).join(" ");
 
-	let debug: ReturnType<typeof createJudgmentSearchDebug> | undefined;
-	let terminalReported = false;
+	let terminal: ReturnType<typeof createSearchRequestTerminal> | undefined;
 	const reportError = (error: unknown) => {
-		if (!terminalReported) {
-			terminalReported = true;
-			debug?.log("request_error", searchErrorDetails(error));
-		}
+		terminal?.("request_error", searchErrorDetails(error));
 		onTraceComplete({ output: "", error });
 		return "An error occurred.";
 	};
@@ -134,8 +138,9 @@ async function handleLegacyChat(
 			const requestDebug = createJudgmentSearchDebug("legacy", debugJudgmentSearch ? (entry) => {
 				writer.write({ type: "data-judgmentSearchDebug", data: entry, transient: true });
 			} : undefined);
-			debug = requestDebug;
 			requestDebug.log("request_start");
+			terminal = createSearchRequestTerminal(requestDebug, abortSignal);
+			abortSignal?.throwIfAborted();
 			const searchQueries = await requestDebug.stage("query_rewrite", () => startActiveObservation("rewrite-query", async (span) => {
 				span.update({ input: inputText });
 				const queries = (await rewriteQuery(modelMessages)).slice(0, 3);
@@ -179,43 +184,26 @@ async function handleLegacyChat(
 					input: { queries: searchQueries },
 				});
 
-				// T08: embed once per rewritten query, share across clic/judgment (/legislation in T10).
-				const queryDebug = searchQueries.map((_, index) => requestDebug.forQuery(index));
-				const queryEmbeddings = await Promise.all(searchQueries.map((q, i) =>
-					queryDebug[i].stage("embedding", () => getEmbeddings(q)),
-				));
-
+				const retrieval = await retrieveSearchQueries(searchQueries, requestDebug, {
+					embed: getEmbeddings,
+					clic: (query, embedding) => collectSearchHits(searchClic(query, { embedding })),
+					judgments: (query, embedding, queryDebug, onPartial) =>
+						collectSearchHits(searchJudgmentSummary(query, { embedding, onPartial }, queryDebug)),
+				});
+				abortSignal?.throwIfAborted();
+				if (searchQueries.length > 0 && retrieval.completed === 0) throw new Error("All search queries failed");
+				for (const result of retrieval.clicLists.flat()) {
+					const existing = clicCandidates.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no);
+					if (!existing) clicCandidates.push(result);
+					else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+				}
 				const judgmentCandidates: JudgmentSummary[] = [];
-				await Promise.all([
-					...searchQueries.map(async (searchQuery, qi) => {
-						await queryDebug[qi].stage("clic_retrieval", () => startActiveObservation("search-clic", async (clicSpan) => {
-							clicSpan.update({ input: searchQuery });
-							let count = 0;
-							for await (const result of searchClic(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								const existing = clicCandidates.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no);
-								if (!existing) clicCandidates.push(result);
-								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
-								count++;
-							}
-							clicSpan.update({ output: { fusionCount: count } });
-							return count;
-						}), (hitCount) => ({ hitCount }));
-					}),
-					...searchQueries.map(async (searchQuery, qi) => {
-						await queryDebug[qi].stage("hybrid_retrieval", () => startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
-							judgmentSpan.update({ input: searchQuery });
-							let count = 0;
-							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] }, queryDebug[qi])) {
-								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
-								if (!existing) judgmentCandidates.push(result);
-								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
-								count++;
-							}
-							judgmentSpan.update({ output: { fusionCount: count } });
-							return count;
-						}), (hitCount) => ({ hitCount }));
-					}),
-				]);
+				for (const result of retrieval.judgmentLists.flat()) {
+					const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
+					if (!existing) judgmentCandidates.push(result);
+					else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+				}
+				if (retrieval.partial) requestDebug.log("retrieval_partial");
 
 				// Global RRF order, cap rerank input, then ONE rerank per corpus.
 				const topByRrf = <T extends { rrf_score?: number | null }>(rows: T[]) =>
@@ -456,8 +444,10 @@ async function handleLegacyChat(
 			});
 			// console.log("modelMessages: ", modelMessages);
 
+			abortSignal?.throwIfAborted();
 			const result = await createLegacyChatAgent(instructions).stream({
 				prompt: modelMessages,
+				abortSignal,
 				onEnd({ usage, text, reasoningText }) {
 						const cost = calculateGpt6LunaCost(usage);
 						// T09: rerank cost is per API call (Cohere bills searches, not docs).
@@ -528,20 +518,16 @@ async function handleLegacyChat(
 			});
 			writer.merge(debugJudgmentSearch ? answer.pipeThrough(new TransformStream({
 				transform(chunk, controller) {
-					if (!terminalReported && chunk.type === "finish") {
-						terminalReported = true;
-						requestDebug.log(chunk.finishReason === "error" ? "request_error" : "request_end", {
+					if (chunk.type === "finish") {
+						terminal?.(chunk.finishReason === "error" ? "request_error" : "request_end", {
 							finishReason: chunk.finishReason,
 						});
 					}
-					if (!terminalReported && chunk.type === "abort") {
-						terminalReported = true;
-						requestDebug.log("request_error", { reason: "aborted" });
-					}
+					if (chunk.type === "abort") terminal?.("request_aborted");
 					controller.enqueue(chunk);
 				},
 				flush() {
-					if (!terminalReported) reportError(new Error("Legacy answer stream closed without a finish event"));
+					terminal?.("request_error", { reason: "missing_finish" });
 				},
 			})) : answer);
 		},
@@ -668,7 +654,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 							});
 						}
 
-						return await handleLegacyChat(validated.data, searchDepth, completeTrace, request.systemPrompt, request.debugJudgmentSearch);
+						return await handleLegacyChat(validated.data, searchDepth, completeTrace, request.systemPrompt, request.debugJudgmentSearch, req.signal);
 					} catch (error) {
 						completeTrace({ output: "", error });
 						await langfuseSpanProcessor.forceFlush();

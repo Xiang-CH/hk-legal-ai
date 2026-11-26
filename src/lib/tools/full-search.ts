@@ -1,3 +1,4 @@
+import { retrieveSearchQueries } from "@/lib/search-fanout";
 import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
 import type { JudgmentSearchDebugSink } from "@/lib/types";
 import { tool } from "ai";
@@ -95,6 +96,7 @@ export const fullSearchOutputSchema = z.union([
 	z.strictObject({
 		searchQueries: z.array(z.string()),
 		results: z.array(fullSearchResultItemSchema).describe("Global top-10 across all corpora, best first. Scores are comparable across kinds (single rerank call)."),
+		partial: z.literal(true).optional().describe("Some sources could not be searched."),
 	}),
 	errorPayloadSchema,
 ]);
@@ -128,36 +130,34 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 			const output = await withTimeout(
 				withToolSpan("tool:full_search", args, async () => {
 					const searchQueries = args.queries.map((q) => q.trim()).filter((q) => q.length > 0).slice(0, 3);
-					if (searchQueries.length === 0) return { error: "full_search: queries must not be empty" };
-					const primaryQuery = searchQueries[0] as string;
+					const [primaryQuery] = searchQueries;
+					if (primaryQuery === undefined) {
+						debug.log("error", { reason: "invalid_query" });
+						return { error: "full_search: queries must not be empty" };
+					}
 					const searchDepth = args.searchDepth ?? 2;
 
 					// 1. Embed once per query, fan out across CLIC + judgments (no lane filter, like the legacy route).
-					const queryDebug = searchQueries.map((_, index) => debug.forQuery(index));
-					const embeddings = await Promise.all(searchQueries.map((q, i) =>
-						queryDebug[i].stage("embedding", () => getEmbeddings(q)),
-					));
-					const clicLists = await Promise.all(
-						searchQueries.map((q, i) =>
-							queryDebug[i].stage("clic_retrieval", () => searchClicChunks(q, { embedding: embeddings[i] }),
-								(hits) => ({ hitCount: hits.length })).catch((): ClicChunkHit[] => []),
-						),
-					);
-					const judgmentLists = await Promise.all(
-						searchQueries.map((q, i) =>
-							queryDebug[i].stage("hybrid_retrieval", () => searchJudgmentChunks(q, { embedding: embeddings[i] }, queryDebug[i]),
-								(hits) => ({ hitCount: hits.length })).catch((): JudgmentChunkHit[] => []),
-						),
-					);
+					const retrieval = await retrieveSearchQueries(searchQueries, debug, {
+						embed: getEmbeddings,
+						clic: (query, embedding) => searchClicChunks(query, { embedding }),
+						judgments: (query, embedding, queryDebug, onPartial) =>
+							searchJudgmentChunks(query, { embedding, onPartial }, queryDebug),
+					});
+					if (retrieval.completed === 0) {
+						debug.log("error", { reason: "all_queries_failed" });
+						return { error: "full_search: all search queries failed" };
+					}
+					let partial = retrieval.partial;
 
 					// 2. Cross-query merge/dedupe (best rrf wins), global RRF order, cap rerank input.
 					const topByRrf = <T extends { rrf_score?: number | null }>(rows: T[]): T[] =>
 						[...rows].sort((a, b) => (b.rrf_score ?? 0) - (a.rrf_score ?? 0)).slice(0, FULL_SEARCH_MERGE_CAP);
 					const clicMerged = topByRrf(
-						mergeBestRrf(clicLists, (h) => `${h.nid}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
+						mergeBestRrf(retrieval.clicLists, (h) => `${h.nid}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
 					);
 					const judgmentMerged = topByRrf(
-						mergeBestRrf(judgmentLists, (hit) => `${hit.judgmentId}:${hit.documentId ?? "summary"}:${hit.chunk_no}`, (hit) => hit.rrf_score ?? 0),
+						mergeBestRrf(retrieval.judgmentLists, (hit) => `${hit.judgmentId}:${hit.documentId ?? "summary"}:${hit.chunk_no}`, (hit) => hit.rrf_score ?? 0),
 					);
 
 					// 3. Legislation graph walk from the merged CLIC nids (mirror of the legacy route).
@@ -182,7 +182,7 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 					if (searchDepth > 1) {
 						const nids = [...new Set(clicMerged.map((h) => h.nid))];
 						if (nids.length > 0) {
-							const rows = await withTimeout(
+							const rows = await debug.stage("legislation_graph", () => withTimeout(
 								prisma.clicPage.findMany({
 									where: { nid: { in: nids } },
 									include: {
@@ -210,7 +210,10 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 								}),
 								TOOL_TIMEOUT_MS,
 								"full_search graph",
-							);
+							)).catch(() => {
+								partial = true;
+								return [];
+							});
 							const seen = new Set<string>();
 							const push = (section: FullSearchGraphRow): void => {
 								const key = `${section.capNumber}\u00a7${section.sectionNumber}`;
@@ -285,6 +288,7 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 
 					return {
 						searchQueries,
+						partial: partial ? true as const : undefined,
 						results: top.map(({ item, rerank_score }): FullSearchResultItem => {
 							if (item.kind === "clic") {
 								return {
@@ -333,9 +337,11 @@ export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 				FULL_SEARCH_TOOL_TIMEOUT_MS,
 				"full_search",
 			);
-			debug.log("end", output.results
-				? { hitCount: output.results.length, judgmentHitCount: output.results.filter((hit) => hit.kind === "judgment").length }
-				: { reason: "invalid_query" });
+			if (output.results) debug.log("end", {
+				hitCount: output.results.length,
+				judgmentHitCount: output.results.filter((hit) => hit.kind === "judgment").length,
+				partial: output.partial,
+			});
 			return output;
 		} catch (err) {
 			debug.log("error", searchErrorDetails(err));

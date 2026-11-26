@@ -171,7 +171,9 @@ export const createSearchClicTool = (onDebug?: JudgmentSearchDebugSink) => tool(
 								rerank_score,
 							})),
 						};
-					}, () => fallbackClicOutput(args), "search_clic", (output) => !("results" in output) || output.results.length > 0);
+					}, () => fallbackClicOutput(args), "search_clic", {
+						isUsable: (output) => !("results" in output) || output.results.length > 0,
+					});
 				}),
 				TOOL_TIMEOUT_MS,
 				"search_clic",

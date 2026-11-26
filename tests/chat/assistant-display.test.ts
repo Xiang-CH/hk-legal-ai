@@ -47,3 +47,19 @@ test("failed tool output uses a failure icon and is excluded from completed coun
   assert.match(html, /lucide-x/);
   assert.doesNotMatch(html, /lucide-check/);
 });
+
+test("broad search renders partial, failed, and successful empty searches differently", () => {
+  const input = { queries: ["copyright"] };
+  const html = renderMessage([
+    { type: "tool-full_search", state: "output-available", toolCallId: "partial", input,
+      output: { searchQueries: input.queries, results: [], partial: true } },
+    { type: "tool-full_search", state: "output-available", toolCallId: "failed", input,
+      output: { error: "all search queries failed" } },
+    { type: "tool-full_search", state: "output-available", toolCallId: "empty", input,
+      output: { searchQueries: input.queries, results: [] } },
+  ]);
+  assert.match(html, /1\/3 completed · 1 partial · 1 failed/);
+  assert.match(html, /Search incomplete · 0 results/);
+  assert.match(html, /Search failed/);
+  assert.match(html, /Completed · 0 results/);
+});

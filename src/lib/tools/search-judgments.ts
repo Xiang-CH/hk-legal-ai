@@ -1,5 +1,5 @@
 import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
-import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
+import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext, JUDGMENT_FALLBACK_BUDGET_MS } from "@/lib/judgment-fulltext";
 import { cjkTokens } from "@/lib/cjk";
 import { tool } from "ai";
 import { z } from "zod";
@@ -27,7 +27,8 @@ const searchJudgmentsInput = z.object({
 	languageCode: z.string().optional().describe("Lane override: 'en' (default) or 'sc'/'tc'."),
 });
 type SearchJudgmentsInput = z.infer<typeof searchJudgmentsInput>;
-const JUDGMENT_LEXICAL_FALLBACK_MS = 15_000;
+const JUDGMENT_PRIMARY_BUDGET_MS = 12_000;
+const JUDGMENT_TOOL_TIMEOUT_MS = JUDGMENT_PRIMARY_BUDGET_MS + JUDGMENT_FALLBACK_BUDGET_MS + 1_000;
 
 export interface JudgmentToolItem {
 	judgmentId: number;
@@ -69,11 +70,9 @@ export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 /** Use lexical full text when available, then preserve summary retrieval if full-text storage or the embedding provider is unavailable. */
 async function fallbackJudgmentOutput(args: SearchJudgmentsInput, debug: ReturnType<typeof createJudgmentSearchDebug>): Promise<JudgmentToolOutput> {
 	if (fulltextEnabled()) {
-		const hits = await debug.stage("lexical_fallback", () => withTimeout(
+		const hits = await debug.stage("lexical_fallback", () =>
 			searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)),
-			JUDGMENT_LEXICAL_FALLBACK_MS,
-			"judgment lexical fallback",
-		), (hits) => ({ hitCount: hits.length })).catch((error: unknown) => {
+		(hits) => ({ hitCount: hits.length })).catch((error: unknown) => {
 			console.error("Judgment lexical full-text search failed; preserving summary fallback", searchErrorDetails(error));
 			return [];
 		});
@@ -161,13 +160,16 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 	inputSchema: searchJudgmentsInput,
 	outputSchema: judgmentToolOutputSchema,
 	execute: async (args: SearchJudgmentsInput, { toolCallId }): Promise<JudgmentToolOutput> => {
-		const extraFallbackMs = fulltextEnabled() ? JUDGMENT_LEXICAL_FALLBACK_MS : 0;
+		const useFulltext = fulltextEnabled();
+		const primaryBudgetMs = useFulltext ? JUDGMENT_PRIMARY_BUDGET_MS : PRIMARY_SEARCH_BUDGET_MS;
+		const fallbackBudgetMs = useFulltext ? JUDGMENT_FALLBACK_BUDGET_MS : SEARCH_FALLBACK_BUDGET_MS;
+		const toolBudgetMs = useFulltext ? JUDGMENT_TOOL_TIMEOUT_MS : TOOL_TIMEOUT_MS;
 		const debug = createJudgmentSearchDebug("search_judgments", onDebug, toolCallId);
 		debug.log("start", {
-			fulltextEnabled: extraFallbackMs > 0,
-			primaryBudgetMs: PRIMARY_SEARCH_BUDGET_MS,
-			fallbackBudgetMs: SEARCH_FALLBACK_BUDGET_MS + extraFallbackMs,
-			toolBudgetMs: TOOL_TIMEOUT_MS + extraFallbackMs,
+			fulltextEnabled: useFulltext,
+			primaryBudgetMs,
+			fallbackBudgetMs,
+			toolBudgetMs,
 		});
 		try {
 			const output = await withTimeout(
@@ -193,7 +195,7 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 									id: true,
 									cases: { select: { caseAct: true, title: true }, take: 1 },
 								},
-							}), (rows) => ({ hitCount: rows.length }));
+							}), (rows) => ({ judgmentCount: rows.length }));
 							for (const judgment of judgments) {
 								const caseSummary = judgment.cases[0];
 								if (caseSummary) {
@@ -221,12 +223,16 @@ export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => 
 								};
 							}),
 						};
-					}, () => fallbackJudgmentOutput(args, debug), "search_judgments",
-					(output) => !("results" in output) || output.results.length > 0,
-					SEARCH_FALLBACK_BUDGET_MS + extraFallbackMs,
-					(event) => debug.log("fallback", "error" in event ? { ...searchErrorDetails(event.error), reason: event.reason } : event));
+					}, () => fallbackJudgmentOutput(args, debug), "search_judgments", {
+						isUsable: (output) => !("results" in output) || output.results.length > 0,
+						fallbackBudgetMs,
+						primaryBudgetMs,
+						onFallback: (event) => debug.log("fallback", "error" in event
+							? { ...searchErrorDetails(event.error), reason: event.reason }
+							: event),
+					});
 				}),
-				TOOL_TIMEOUT_MS + extraFallbackMs,
+				toolBudgetMs,
 				"search_judgments",
 			);
 			debug.log("end", "results" in output ? { hitCount: output.results.length } : { reason: "invalid_query" });

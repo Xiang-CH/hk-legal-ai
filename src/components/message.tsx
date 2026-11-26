@@ -2,7 +2,7 @@
 
 import { motion } from "framer-motion";
 
-import { Check, ChevronDownIcon, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDownIcon, X } from "lucide-react";
 import { SparklesIcon } from "./icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "./ui/collapsible";
 import { Markdown } from "./markdown";
@@ -127,7 +127,7 @@ function toolResultCount(part: ChatToolPart): number | null {
 }
 
 /** Map streaming tool states to a visible label plus pending/failure indicators. */
-function toolState(part: ChatToolPart): { label: string; pending: boolean; failed: boolean } {
+function toolState(part: ChatToolPart): { label: string; pending: boolean; failed: boolean; partial?: true } {
   switch (part.state) {
     case "input-streaming":
     case "input-available":
@@ -154,6 +154,14 @@ function toolState(part: ChatToolPart): { label: string; pending: boolean; faile
         }
       }
       const count = toolResultCount(part);
+      if (part.type === "tool-full_search" && isRecord(output) && output.partial === true) {
+        return {
+          label: count === 0 ? "Search incomplete · 0 results" : `Partial results · ${count ?? 0}`,
+          pending: false,
+          failed: false,
+          partial: true,
+        };
+      }
       return {
         label: count === null ? "Completed" : `Completed · ${count} result${count === 1 ? "" : "s"}`,
         pending: false,
@@ -199,6 +207,8 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
         />
       ) : state.failed ? (
         <X className="size-3.5 shrink-0 text-destructive" aria-hidden />
+      ) : state.partial ? (
+        <AlertTriangle className="size-3.5 shrink-0" aria-hidden />
       ) : (
         <Check className="size-3.5 shrink-0" aria-hidden />
       )}
@@ -213,11 +223,22 @@ function ToolProgress({ part }: { part: ChatToolPart }) {
   );
 }
 
+function SearchProgressSummary({ parts }: { parts: ChatToolPart[] }) {
+  let completed = 0;
+  let failed = 0;
+  let partial = 0;
+  for (const part of parts) {
+    const state = toolState(part);
+    if (state.failed) failed++;
+    else if (state.partial) partial++;
+    else if (part.state === "output-available") completed++;
+  }
+  return <>Search progress: {completed}/{parts.length} completed{partial > 0 && ` · ${partial} partial`}{failed > 0 && ` · ${failed} failed`}</>;
+}
+
 /** Collapse long tool groups to three recent steps, retaining pending work and an expandable failure summary. */
 function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
   const [open, setOpen] = React.useState(false);
-  const completed = parts.filter((part) => part.state === "output-available" && !toolState(part).failed).length;
-  const failed = parts.filter((part) => toolState(part).failed).length;
   const previewParts = [
     ...parts.filter((part) => !toolState(part).pending),
     ...parts.filter((part) => toolState(part).pending),
@@ -227,7 +248,7 @@ function SearchProgress({ parts }: { parts: ChatToolPart[] }) {
       <CollapsibleTrigger className="flex w-full min-w-0 items-center gap-2 text-left text-xs text-muted-foreground">
         <ChevronDownIcon className={cn("size-4 shrink-0 transition-transform", !open && "-rotate-90")} />
         <span className="min-w-0 flex-1">
-          Search progress: {completed}/{parts.length} completed{failed > 0 && ` · ${failed} failed`}
+          <SearchProgressSummary parts={parts} />
         </span>
         <span className="shrink-0">{open ? "Hide details" : "Show details"}</span>
       </CollapsibleTrigger>
@@ -315,7 +336,6 @@ const PreviewMessage = React.forwardRef<
   const askQuestionParts = message.parts.filter(isAskQuestionPart);
   const hasTextContent = textParts.some((part) => part.text.trim().length > 0);
   const hasReasoningContent = reasoningParts.some((part) => part.text.trim().length > 0);
-  const completedToolCount = toolParts.filter((part) => part.state === "output-available" && !toolState(part).failed).length;
   const collapseToolProgress = toolParts.length > 4;
 
   if (message.role === "user" && !hasTextContent) return null;
@@ -423,7 +443,7 @@ const PreviewMessage = React.forwardRef<
 
           {message.role === "assistant" && toolParts.length > 0 && !collapseToolProgress && (
             <div className="text-xs text-muted-foreground">
-              Search progress: {completedToolCount}/{toolParts.length} completed
+              <SearchProgressSummary parts={toolParts} />
             </div>
           )}
 

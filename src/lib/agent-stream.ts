@@ -2,7 +2,7 @@ import type { InferUIMessageChunk, LanguageModelUsage, TextStreamPart } from "ai
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream } from "ai";
 
 import { langfuseSpanProcessor } from "@/instrumentation";
-import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { createJudgmentSearchDebug, createSearchRequestTerminal, searchErrorDetails } from "@/lib/judgment-search-debug";
 import { createChatAgent } from "@/lib/chat-agent";
 import { calculateGpt6LunaCost } from "@/lib/pricing";
 import {
@@ -331,11 +331,14 @@ export async function createAgenticChatResponse({
   const debugSink: JudgmentSearchDebugSink | undefined = debugJudgmentSearch ? (entry) => emitDebug(entry) : undefined;
   const debug = createJudgmentSearchDebug("agent", debugSink);
   debug.log("request_start");
+  const terminal = createSearchRequestTerminal(debug, abortSignal);
   const agent = createChatAgent(maxSteps, instructions, debugSink);
-  const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
-  const result = await agent.stream({
-    prompt: modelMessages,
-    abortSignal,
+  const result = await (async () => {
+    const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
+    return agent.stream({ prompt: modelMessages, abortSignal });
+  })().catch((error: unknown) => {
+    terminal("request_error", searchErrorDetails(error));
+    throw error;
   });
 
   const trackedStream = result.stream.pipeThrough(
@@ -350,6 +353,7 @@ export async function createAgenticChatResponse({
         if (chunk.type === "error") {
           streamError = chunk.error;
         }
+        if (chunk.type === "abort") terminal("request_aborted");
         if (chunk.type === "finish") {
           usage = chunk.totalUsage;
         }
@@ -459,13 +463,11 @@ export async function createAgenticChatResponse({
             }),
           });
         }
-        if (debugJudgmentSearch) {
-          debug.log(streamError === undefined ? "request_end" : "request_error", {
-            toolCallCount: toolNamesByCallId.size,
-            judgmentToolRequested: [...toolNamesByCallId.values()].some((name) => name === "search_judgments" || name === "full_search"),
-            ...(streamError === undefined ? {} : searchErrorDetails(streamError)),
-          });
-        }
+        terminal(streamError === undefined ? "request_end" : "request_error", {
+          toolCallCount: toolNamesByCallId.size,
+          judgmentToolRequested: [...toolNamesByCallId.values()].some((name) => name === "search_judgments" || name === "full_search"),
+          ...(streamError === undefined ? {} : searchErrorDetails(streamError)),
+        });
         onTraceComplete({
           output: outputText,
           ...(streamError === undefined ? {} : { error: streamError }),

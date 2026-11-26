@@ -22,13 +22,19 @@ const hitSchema = _schema.object({
  lexical_rank: _schema.number().nullable(), vector_distance: _schema.number().nullable(), rrf_score: _schema.number(),
  ...sourceFields,
 });
+export const JUDGMENT_FALLBACK_BUDGET_MS = 12_000;
+const FULLTEXT_POOL_WAIT_MS = 1_500;
+const LEXICAL_RETURN_BUFFER_MS = 250;
+const LEXICAL_TRANSACTION_TIMEOUT_MS = JUDGMENT_FALLBACK_BUDGET_MS - FULLTEXT_POOL_WAIT_MS - LEXICAL_RETURN_BUFFER_MS;
+
 /** Search only active current-generation chunks, combining lexical ranking with an optional caller-supplied embedding. */
 export async function searchFulltext(query: string, tokens: string, embedding: number[] | null, languages: string[]) {
  if (embedding && (embedding.length !== 3072 || !embedding.every(Number.isFinite))) throw new Error("Invalid query embedding");
+ const statementTimeoutMs = embedding ? 8_000 : LEXICAL_TRANSACTION_TIMEOUT_MS - LEXICAL_RETURN_BUFFER_MS;
  const rows = await prisma.$transaction(async (tx) => {
   // Bound the database work so summary retrieval can recover from a slow plan or lock.
   await tx.$queryRaw`
-   SELECT set_config('statement_timeout', '8s', true) AS statement_timeout,
+   SELECT set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true) AS statement_timeout,
           set_config('hnsw.iterative_scan', 'strict_order', true) AS iterative_scan
   `;
   return tx.$queryRawUnsafe<unknown>(`
@@ -71,7 +77,10 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
  ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
- }, { maxWait: 1_500, timeout: 11_000 });
+ }, {
+  maxWait: FULLTEXT_POOL_WAIT_MS,
+  timeout: embedding ? 11_000 : LEXICAL_TRANSACTION_TIMEOUT_MS,
+ });
  return _schema.array(hitSchema).parse(rows).map(hit => {
  const url=hit.url?new URL(hit.url,"https://hklii.hk"):null;
  if(url && hit.sourceAnchor)url.hash=hit.sourceAnchor.replace(/^#/, "");

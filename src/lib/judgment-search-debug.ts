@@ -21,6 +21,27 @@ export function searchErrorDetails(error: unknown) {
 	};
 }
 
+type RequestTerminalEvent = "request_end" | "request_error" | "request_aborted";
+
+/** Record only the first terminal state, including disconnects before answer streaming starts. */
+export function createSearchRequestTerminal(
+	debug: Pick<ReturnType<typeof createJudgmentSearchDebug>, "log">,
+	signal?: AbortSignal,
+) {
+	let reported = false;
+	const onAbort = () => report("request_aborted");
+	function report(event: RequestTerminalEvent, details?: JudgmentSearchDebugEvent["details"]) {
+		if (reported) return;
+		reported = true;
+		signal?.removeEventListener("abort", onAbort);
+		if (event === "request_aborted" || signal?.aborted) debug.log("request_aborted", { reason: "aborted" });
+		else debug.log(event, details);
+	}
+	if (signal?.aborted) onAbort();
+	else signal?.addEventListener("abort", onAbort, { once: true });
+	return report;
+}
+
 export function createJudgmentSearchDebug(path: string, onDebug?: JudgmentSearchDebugSink, toolCallId?: string) {
 	const searchId = onDebug ? randomUUID() : undefined;
 	const started = performance.now();

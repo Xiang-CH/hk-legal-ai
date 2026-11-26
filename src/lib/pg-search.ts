@@ -191,18 +191,11 @@ FROM fused f JOIN clic_chunks c ON c.id = f.id`,
 /** Q2: judgment_chunks — same shape, no topic filter. */
 export async function searchJudgmentChunks(
 	query: string,
-	opts: PgSearchOpts,
+	opts: PgSearchOpts & { onPartial?: () => void },
 	debug?: Pick<ReturnType<typeof createJudgmentSearchDebug>, "stage">,
 ): Promise<JudgmentChunkHit[]> {
 	const useFulltext = fulltextEnabled();
 	const runFulltext = () => searchFulltext(query, cjkTokens(query), opts.embedding, resolveLanguageCodes(query, opts.languageCodes));
-	const fulltextPromise = useFulltext
-		? (debug?.stage("fulltext_fusion", runFulltext, (hits) => ({ hitCount: hits.length })) ?? runFulltext())
-			.catch((error: unknown) => {
-				console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
-				return [];
-			})
-		: Promise.resolve([]);
 	const runSummaries = () => runFusion<JudgmentChunkHit>({
 		table: "judgment_chunks",
 		query,
@@ -216,11 +209,21 @@ export async function searchJudgmentChunks(
        ${snippetSql("c.content")}
 FROM fused f JOIN judgment_chunks c ON c.id = f.id`,
 	});
-	const summaries = await (debug?.stage("summary_fusion", runSummaries, (hits) => ({ hitCount: hits.length })) ?? runSummaries());
-	if (!useFulltext) return summaries;
-	const fulltext = await fulltextPromise;
+	const summarySearch = debug?.stage("summary_fusion", runSummaries, (hits) => ({ hitCount: hits.length })) ?? runSummaries();
+	if (!useFulltext) return summarySearch;
+	const [summaries, fulltext] = await Promise.allSettled([
+		summarySearch,
+		debug?.stage("fulltext_fusion", runFulltext, (hits) => ({ hitCount: hits.length })) ?? runFulltext(),
+	]);
+	if (summaries.status === "rejected" && fulltext.status === "rejected") throw summaries.reason;
+	if (summaries.status === "rejected" || fulltext.status === "rejected") opts.onPartial?.();
+	if (fulltext.status === "rejected") {
+		const error: unknown = fulltext.reason;
+		console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
+	}
  const selected: JudgmentChunkHit[] = [];
- for (const hit of [...summaries,...fulltext].sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
+ const availableHits = [summaries, fulltext].flatMap((result) => result.status === "fulfilled" ? result.value : []);
+ for (const hit of availableHits.sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
   if(hit.documentId && selected.some(other => other.documentId===hit.documentId && other.startPosition!==undefined && other.endPosition!==undefined && hit.startPosition!==undefined && hit.endPosition!==undefined && other.startPosition<=hit.endPosition && hit.startPosition<=other.endPosition)) continue;
   selected.push(hit);
  }

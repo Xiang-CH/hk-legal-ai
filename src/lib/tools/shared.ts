@@ -23,6 +23,7 @@ export const FULL_SEARCH_LEGISLATION_SNIPPET_CHARS = 500;
 // the substring fallback (single indexed query) needs far less, so it gets the remainder.
 export const PRIMARY_SEARCH_BUDGET_MS = 7_000;
 export const SEARCH_FALLBACK_BUDGET_MS = TOOL_TIMEOUT_MS - PRIMARY_SEARCH_BUDGET_MS - 250;
+export const PARALLEL_RETRIEVAL_BUDGET_MS = 25_000;
 export const RERANK_TIMEOUT_MS = 4_000;
 export const RERANK_TOP_CLIC = 10;
 export const RERANK_TOP_JUDGMENT = 8;
@@ -64,13 +65,21 @@ export async function withSearchFallback<T>(
 	primary: () => Promise<T>,
 	fallback: () => Promise<T>,
 	label: string,
-	isUsable: (value: T) => boolean = () => true,
-	fallbackBudgetMs = SEARCH_FALLBACK_BUDGET_MS,
-	onFallback?: (event: { reason: "no_usable_result" } | { reason: "timeout" | "error"; error: unknown }) => void,
+	{
+		isUsable = () => true,
+		primaryBudgetMs = PRIMARY_SEARCH_BUDGET_MS,
+		fallbackBudgetMs = SEARCH_FALLBACK_BUDGET_MS,
+		onFallback,
+	}: {
+		isUsable?: (value: T) => boolean;
+		primaryBudgetMs?: number;
+		fallbackBudgetMs?: number;
+		onFallback?: (event: { reason: "no_usable_result" } | { reason: "timeout" | "error"; error: unknown }) => void;
+	} = {},
 ): Promise<T> {
 	let fallbackReason: Parameters<NonNullable<typeof onFallback>>[0] = { reason: "no_usable_result" };
 	try {
-		const result = await withTimeout(primary(), PRIMARY_SEARCH_BUDGET_MS, `${label} primary`);
+		const result = await withTimeout(primary(), primaryBudgetMs, `${label} primary`);
 		if (isUsable(result)) return result;
 	} catch (error) {
 		fallbackReason = { reason: error instanceof ToolTimeoutError ? "timeout" : "error", error };
