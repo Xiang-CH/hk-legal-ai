@@ -2,9 +2,8 @@
  * T08 — Postgres fusion search (pgvector + FTS + pg_trgm, RRF).
  *
  * Single Azure PG Flexible Server replaces Azure AI Search (index lost, rebuilt from source).
- * Ported from tickets/T08-fusion-draft.sql, generalized so ONE round-trip covers mixed
- * language lanes: `language_code = ANY($langs)` with per-row CASE on `language_code`
- * (instead of one query per ($lang) like the draft).
+ * Ported from tickets/T08-fusion-draft.sql. One round-trip covers all
+ * requested languages.
  *
  * Per (query × corpus): lexical LIMIT 15 + vector LIMIT 15 -> RRF 1/(60+rank) -> top-30,
  * snippet via ts_headline (lexical hits) / left(content,300) (vector-only hits).
@@ -16,6 +15,7 @@
  * (In-DB azure_openai.create_embeddings stays an option, but app-side keeps one code
  * path and avoids DB outbound/timeout coupling — see T08 ticket.)
  */
+import type { createJudgmentSearchDebug } from "@/lib/judgment-search-debug";
 import { fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
 import { z } from "zod";
 import { sourceFields } from "@/lib/judgment-fulltext";
@@ -110,24 +110,44 @@ async function runFusion<T>(args: {
 		params.push(args.opts.topics);
 		topicClause = `AND topic = ANY($${params.length})`;
 	}
-	// NOTE: explicit ::int / ::float8 casts — raw numeric/bigint come back from pg as
-	// string/bigint and would break JSON serialization downstream.
-	const sql = `
-WITH lex AS (
+	const englishQuery = "plainto_tsquery('english', $1)";
+	const cjkQuery = "plainto_tsquery('simple', $2)";
+	const cjkVector = "to_tsvector('simple', cjk_tokens)";
+	const englishScore = `ts_rank(tsv, ${englishQuery})`;
+	const cjkScore = `0.7 * ts_rank(${cjkVector}, ${cjkQuery}) + 0.3 * similarity(cjk_tokens, $2)`;
+	const englishMatch = `tsv @@ ${englishQuery}`;
+	const cjkMatch = `(${cjkVector} @@ ${cjkQuery} OR cjk_tokens % $2)`;
+	let lexicalMatches = `
   SELECT id,
          CASE WHEN language_code = 'en'
-           THEN ts_rank(tsv, plainto_tsquery('english', $1))
-           ELSE 0.7 * ts_rank(to_tsvector('simple', cjk_tokens), plainto_tsquery('simple', $2))
-              + 0.3 * similarity(cjk_tokens, $2)
+           THEN ${englishScore}
+           ELSE ${cjkScore}
          END AS score
   FROM ${args.table}
   WHERE language_code = ANY($4)
     AND (CASE WHEN language_code = 'en'
-      THEN tsv @@ plainto_tsquery('english', $1)
-      ELSE to_tsvector('simple', cjk_tokens) @@ plainto_tsquery('simple', $2)
-        OR cjk_tokens % $2
+      THEN ${englishMatch}
+      ELSE ${cjkMatch}
     END)
-  ${topicClause}
+  ${topicClause}`;
+	if (args.table === "legislation_chunks") {
+		// Expose the English predicate to the GIN planner. Apply the limit
+		// after combining the language branches so they still compete by score.
+		const branches: string[] = [];
+		if (langs.includes("en")) branches.push(`
+  SELECT id, ${englishScore} AS score
+  FROM legislation_chunks
+  WHERE language_code = 'en' AND ${englishMatch}`);
+		if (langs.some((lang) => lang !== "en")) branches.push(`
+  SELECT id, ${cjkScore} AS score
+  FROM legislation_chunks
+  WHERE language_code = ANY(array_remove($4::text[], 'en')) AND ${cjkMatch}`);
+		lexicalMatches = branches.join("\n  UNION ALL\n");
+	}
+	// NOTE: explicit ::int / ::float8 casts — raw numeric/bigint come back from pg as
+	// string/bigint and would break JSON serialization downstream.
+	const sql = `
+WITH lex AS (${lexicalMatches}
   ORDER BY score DESC
   LIMIT ${LEX_LIMIT}
 ),
@@ -169,14 +189,14 @@ FROM fused f JOIN clic_chunks c ON c.id = f.id`,
 }
 
 /** Q2: judgment_chunks — same shape, no topic filter. */
-export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): Promise<JudgmentChunkHit[]> {
- const fulltextPromise = fulltextEnabled()
-  ? searchFulltext(query,cjkTokens(query),opts.embedding,resolveLanguageCodes(query,opts.languageCodes)).catch((error: unknown) => {
-   console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
-   return [];
-  })
-  : Promise.resolve([]);
-	const summaries = await runFusion<JudgmentChunkHit>({
+export async function searchJudgmentChunks(
+	query: string,
+	opts: PgSearchOpts & { onPartial?: () => void },
+	debug?: Pick<ReturnType<typeof createJudgmentSearchDebug>, "stage">,
+): Promise<JudgmentChunkHit[]> {
+	const useFulltext = fulltextEnabled();
+	const runFulltext = () => searchFulltext(query, cjkTokens(query), opts.embedding, resolveLanguageCodes(query, opts.languageCodes));
+	const runSummaries = () => runFusion<JudgmentChunkHit>({
 		table: "judgment_chunks",
 		query,
 		opts,
@@ -189,10 +209,21 @@ export async function searchJudgmentChunks(query: string, opts: PgSearchOpts): P
        ${snippetSql("c.content")}
 FROM fused f JOIN judgment_chunks c ON c.id = f.id`,
 	});
- if (!fulltextEnabled()) return summaries;
- const fulltext = await fulltextPromise;
+	const summarySearch = debug?.stage("summary_fusion", runSummaries, (hits) => ({ hitCount: hits.length })) ?? runSummaries();
+	if (!useFulltext) return summarySearch;
+	const [summaries, fulltext] = await Promise.allSettled([
+		summarySearch,
+		debug?.stage("fulltext_fusion", runFulltext, (hits) => ({ hitCount: hits.length })) ?? runFulltext(),
+	]);
+	if (summaries.status === "rejected" && fulltext.status === "rejected") throw summaries.reason;
+	if (summaries.status === "rejected" || fulltext.status === "rejected") opts.onPartial?.();
+	if (fulltext.status === "rejected") {
+		const error: unknown = fulltext.reason;
+		console.error("Judgment full-text search failed; preserving summary results", { message: error instanceof Error ? error.message : "Unknown error" });
+	}
  const selected: JudgmentChunkHit[] = [];
- for (const hit of [...summaries,...fulltext].sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
+ const availableHits = [summaries, fulltext].flatMap((result) => result.status === "fulfilled" ? result.value : []);
+ for (const hit of availableHits.sort((leftHit,rightHit)=>rightHit.rrf_score-leftHit.rrf_score)) {
   if(hit.documentId && selected.some(other => other.documentId===hit.documentId && other.startPosition!==undefined && other.endPosition!==undefined && hit.startPosition!==undefined && hit.endPosition!==undefined && other.startPosition<=hit.endPosition && hit.startPosition<=other.endPosition)) continue;
   selected.push(hit);
  }

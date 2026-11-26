@@ -22,10 +22,22 @@ const hitSchema = _schema.object({
  lexical_rank: _schema.number().nullable(), vector_distance: _schema.number().nullable(), rrf_score: _schema.number(),
  ...sourceFields,
 });
+export const JUDGMENT_FALLBACK_BUDGET_MS = 12_000;
+const FULLTEXT_POOL_WAIT_MS = 1_500;
+const LEXICAL_RETURN_BUFFER_MS = 250;
+const LEXICAL_TRANSACTION_TIMEOUT_MS = JUDGMENT_FALLBACK_BUDGET_MS - FULLTEXT_POOL_WAIT_MS - LEXICAL_RETURN_BUFFER_MS;
+
 /** Search only active current-generation chunks, combining lexical ranking with an optional caller-supplied embedding. */
 export async function searchFulltext(query: string, tokens: string, embedding: number[] | null, languages: string[]) {
  if (embedding && (embedding.length !== 3072 || !embedding.every(Number.isFinite))) throw new Error("Invalid query embedding");
- const rows = await prisma.$queryRawUnsafe<unknown>(`
+ const statementTimeoutMs = embedding ? 8_000 : LEXICAL_TRANSACTION_TIMEOUT_MS - LEXICAL_RETURN_BUFFER_MS;
+ const rows = await prisma.$transaction(async (tx) => {
+  // Bound the database work so summary retrieval can recover from a slow plan or lock.
+  await tx.$queryRaw`
+   SELECT set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true) AS statement_timeout,
+          set_config('hnsw.iterative_scan', 'strict_order', true) AS iterative_scan
+  `;
+  return tx.$queryRawUnsafe<unknown>(`
  WITH current AS NOT MATERIALIZED (
  SELECT c.* FROM judgment_fulltext_chunks c
  JOIN judgment_fulltext_active a ON a.document_id=c.document_id AND a.generation=c.generation
@@ -36,9 +48,20 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  FROM current WHERE tsv @@ plainto_tsquery('english',$1)
  OR to_tsvector('simple',cjk_tokens) @@ plainto_tsquery('simple',$2) ORDER BY rank,id LIMIT 15
  ), vec AS (
- SELECT id, embedding <=> $3::halfvec AS distance FROM current WHERE embedding IS NOT NULL AND status='ready' AND $3::halfvec IS NOT NULL
- AND model='text-embedding-3-large' AND deployment=$5 AND model_version=$6
- ORDER BY embedding <=> $3::halfvec LIMIT 15
+ -- One per-candidate predicate keeps HNSW available without joining the corpus
+ -- or multiplying the planner's selectivity estimates for the two generations.
+ SELECT c.id, c.embedding <=> $3::halfvec AS distance
+ FROM judgment_fulltext_chunks c
+ WHERE c.embedding IS NOT NULL AND c.status='ready' AND $3::halfvec IS NOT NULL
+ AND c.model='text-embedding-3-large' AND c.deployment=$5 AND c.model_version=$6
+ AND c.language_code=ANY($4)
+ AND (
+   SELECT a.generation = c.generation AND d.generation::text = c.document_generation
+   FROM judgment_fulltext_active a
+   JOIN judgment_documents d ON d.id = a.document_id
+   WHERE a.document_id = c.document_id
+ )
+ ORDER BY c.embedding <=> $3::halfvec LIMIT 15
  ), vr AS (SELECT *,row_number() OVER(ORDER BY distance,id) AS rank FROM vec)
  SELECT c.judgment_id AS "judgmentId",c.chunk_no,c.content,left(c.content,600) AS snippet,
  c.neutral_citation AS "neutralCitation",c.court_name AS "courtName",c.year,to_char(c.date AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS date,c.parties,
@@ -54,6 +77,10 @@ export async function searchFulltext(query: string, tokens: string, embedding: n
  LEFT JOIN lex ON lex.id=c.id LEFT JOIN vr ON vr.id=c.id
  ORDER BY rrf_score DESC,c.id LIMIT 30
  `,query,tokens,embedding ? JSON.stringify(embedding) : null,languages,process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT ?? 'text-embedding-3-large',process.env.JUDGMENT_EMBEDDING_VERSION ?? '1');
+ }, {
+  maxWait: FULLTEXT_POOL_WAIT_MS,
+  timeout: embedding ? 11_000 : LEXICAL_TRANSACTION_TIMEOUT_MS,
+ });
  return _schema.array(hitSchema).parse(rows).map(hit => {
  const url=hit.url?new URL(hit.url,"https://hklii.hk"):null;
  if(url && hit.sourceAnchor)url.hash=hit.sourceAnchor.replace(/^#/, "");

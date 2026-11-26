@@ -1,12 +1,15 @@
-import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext } from "@/lib/judgment-fulltext";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { sourceFields, judgmentSourceMetadata, fulltextEnabled, searchFulltext, JUDGMENT_FALLBACK_BUDGET_MS } from "@/lib/judgment-fulltext";
 import { cjkTokens } from "@/lib/cjk";
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { searchJudgmentChunks, resolveLanguageCodes, type JudgmentChunkHit } from "@/lib/pg-search";
 import { getEmbeddings } from "@/lib/clic-api";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import {
 	TOOL_TIMEOUT_MS,
+	PRIMARY_SEARCH_BUDGET_MS,
 	SEARCH_FALLBACK_BUDGET_MS,
 	RERANK_TOP_JUDGMENT,
 	withTimeout,
@@ -24,6 +27,8 @@ const searchJudgmentsInput = z.object({
 	languageCode: z.string().optional().describe("Lane override: 'en' (default) or 'sc'/'tc'."),
 });
 type SearchJudgmentsInput = z.infer<typeof searchJudgmentsInput>;
+const JUDGMENT_PRIMARY_BUDGET_MS = 12_000;
+const JUDGMENT_TOOL_TIMEOUT_MS = JUDGMENT_PRIMARY_BUDGET_MS + JUDGMENT_FALLBACK_BUDGET_MS + 1_000;
 
 export interface JudgmentToolItem {
 	judgmentId: number;
@@ -63,12 +68,14 @@ export const judgmentToolOutputSchema = z.union([
 export type JudgmentToolOutput = z.infer<typeof judgmentToolOutputSchema>;
 
 /** Use lexical full text when available, then preserve summary retrieval if full-text storage or the embedding provider is unavailable. */
-async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<JudgmentToolOutput> {
+async function fallbackJudgmentOutput(args: SearchJudgmentsInput, debug: ReturnType<typeof createJudgmentSearchDebug>): Promise<JudgmentToolOutput> {
 	if (fulltextEnabled()) {
-		const hits = await withTimeout(searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)), Math.floor(SEARCH_FALLBACK_BUDGET_MS / 2), 'judgment lexical fallback').catch((error: unknown) => {
-      console.error("Judgment lexical full-text search failed; preserving summary fallback", { message: error instanceof Error ? error.message : "Unknown error" });
-      return [];
-    });
+		const hits = await debug.stage("lexical_fallback", () =>
+			searchFulltext(args.query, cjkTokens(args.query), null, resolveLanguageCodes(args.query, args.languageCode ? [args.languageCode] : undefined)),
+		(hits) => ({ hitCount: hits.length })).catch((error: unknown) => {
+			console.error("Judgment lexical full-text search failed; preserving summary fallback", searchErrorDetails(error));
+			return [];
+		});
 		if (hits.length) return { results: hits.slice(0, RERANK_TOP_JUDGMENT).map(hit => ({
 			judgmentId: hit.judgmentId, chunk_no: hit.chunk_no, neutralCitation: hit.neutralCitation,
 			courtName: hit.courtName, year: hit.year, caseAct: null, caseTitle: hit.parties ?? hit.neutralCitation,
@@ -81,7 +88,7 @@ async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<Judgm
 	// No usable term to constrain the lookup: return nothing rather than
 	// arbitrary rows the model could cite.
 	if (!primaryTerm) return { results: [] };
-	const rows = await prisma.judgmentChunk.findMany({
+	const rows = await debug.stage("summary_fallback", () => prisma.judgmentChunk.findMany({
 		where: {
 			...(args.languageCode ? { languageCode: args.languageCode } : {}),
 			...(primaryTerm ? { content: { contains: primaryTerm, mode: "insensitive" } } : {}),
@@ -98,7 +105,7 @@ async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<Judgm
 		},
 		orderBy: { id: "asc" },
 		take: 50,
-	});
+	}), (rows) => ({ hitCount: rows.length }));
 	const rankedRows = rows
 		.map((item) => ({
 			item,
@@ -147,34 +154,48 @@ async function fallbackJudgmentOutput(args: SearchJudgmentsInput): Promise<Judgm
 }
 
 /** search_judgments: T08 judgment fusion top-30 -> dedupe -> T09 rerank -> top-8. */
-export const searchJudgmentsTool = tool({
+export const createSearchJudgmentsTool = (onDebug?: JudgmentSearchDebugSink) => tool({
 	description:
 		"Search Hong Kong judgment summaries (Postgres fusion: lexical + vector, RRF). Returns the final top-8 post-rerank chunks with caseAct and caseTitle identifiers for get_case.",
 	inputSchema: searchJudgmentsInput,
 	outputSchema: judgmentToolOutputSchema,
-	execute: async (args: SearchJudgmentsInput): Promise<JudgmentToolOutput> => {
+	execute: async (args: SearchJudgmentsInput, { toolCallId }): Promise<JudgmentToolOutput> => {
+		const useFulltext = fulltextEnabled();
+		const primaryBudgetMs = useFulltext ? JUDGMENT_PRIMARY_BUDGET_MS : PRIMARY_SEARCH_BUDGET_MS;
+		const fallbackBudgetMs = useFulltext ? JUDGMENT_FALLBACK_BUDGET_MS : SEARCH_FALLBACK_BUDGET_MS;
+		const toolBudgetMs = useFulltext ? JUDGMENT_TOOL_TIMEOUT_MS : TOOL_TIMEOUT_MS;
+		const debug = createJudgmentSearchDebug("search_judgments", onDebug, toolCallId);
+		debug.log("start", {
+			fulltextEnabled: useFulltext,
+			primaryBudgetMs,
+			fallbackBudgetMs,
+			toolBudgetMs,
+		});
 		try {
-			return await withTimeout(
+			const output = await withTimeout(
 				withToolSpan("tool:search_judgments", args, async () => {
 					if (!args.query.trim()) return { error: "search_judgments: query must not be empty" };
 					return withSearchFallback(async (): Promise<JudgmentToolOutput> => {
-						const embedding = await getEmbeddings(args.query);
-						const hits = await searchJudgmentChunks(args.query, {
+						const embedding = await debug.stage("embedding", () => getEmbeddings(args.query));
+						const hits = await debug.stage("hybrid_retrieval", () => searchJudgmentChunks(args.query, {
 							embedding,
 							languageCodes: args.languageCode ? [args.languageCode] : undefined,
-						});
+						}, debug), (hits) => ({ hitCount: hits.length, fulltextHitCount: hits.filter((hit) => hit.contentType === "fulltext").length }));
 						const unique = dedupe(hits, (h: JudgmentChunkHit) => `${h.judgmentId}:${h.documentId ?? "summary"}:${h.chunk_no}`);
-						const ranked = await fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT);
+						const ranked = await debug.stage("rerank", () => fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_JUDGMENT, {
+							onFallback: (details) => debug.log("rerank_fallback", details),
+						}),
+							(rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score !== null).length }));
 						const judgmentIds = ranked.map(({ item }) => item.judgmentId);
 						const casesByJudgmentId = new Map<number, { caseAct: string; title: string }>();
 						if (judgmentIds.length > 0) {
-							const judgments = await prisma.judgment.findMany({
+							const judgments = await debug.stage("case_metadata", () => prisma.judgment.findMany({
 								where: { id: { in: judgmentIds } },
 								select: {
 									id: true,
 									cases: { select: { caseAct: true, title: true }, take: 1 },
 								},
-							});
+							}), (rows) => ({ judgmentCount: rows.length }));
 							for (const judgment of judgments) {
 								const caseSummary = judgment.cases[0];
 								if (caseSummary) {
@@ -202,13 +223,24 @@ export const searchJudgmentsTool = tool({
 								};
 							}),
 						};
-					}, () => fallbackJudgmentOutput(args), "search_judgments", (output) => !("results" in output) || output.results.length > 0);
+					}, () => fallbackJudgmentOutput(args, debug), "search_judgments", {
+						isUsable: (output) => !("results" in output) || output.results.length > 0,
+						fallbackBudgetMs,
+						primaryBudgetMs,
+						onFallback: (event) => debug.log("fallback", "error" in event
+							? { ...searchErrorDetails(event.error), reason: event.reason }
+							: event),
+					});
 				}),
-				TOOL_TIMEOUT_MS,
+				toolBudgetMs,
 				"search_judgments",
 			);
+			debug.log("end", "results" in output ? { hitCount: output.results.length } : { reason: "invalid_query" });
+			return output;
 		} catch (err) {
+			debug.log("error", searchErrorDetails(err));
 			return { error: `search_judgments failed: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	},
 });
+export const searchJudgmentsTool = createSearchJudgmentsTool();

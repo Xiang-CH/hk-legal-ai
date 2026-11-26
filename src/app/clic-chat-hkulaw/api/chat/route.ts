@@ -2,6 +2,8 @@ import { prisma } from "@/lib/prisma";
 import { z } from "zod";
 import { after } from "next/server";
 import { randomUUID } from "node:crypto";
+import { createJudgmentSearchDebug, createSearchRequestTerminal, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { retrieveSearchQueries } from "@/lib/search-fanout";
 import { SYSTEM_PROMPT_MAX_CHARS } from "@/lib/chat-settings";
 import {
 	clientIpFromHeaders,
@@ -13,7 +15,7 @@ import {
 
 import type { LegislationSection, MyUIMessage, JudgmentSummary } from "@/lib/types";
 import { chatDataSchemas, metadataSchema } from "@/lib/types";
-import { createChatAgent, createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
+import { createLegacyChatAgent, DEFAULT_AGENT_MAX_STEPS, AGENT_MAX_STEPS_CAP } from "@/lib/chat-agent";
 import { createAgenticChatResponse, type TraceCompletion } from "@/lib/agent-stream";
 import { searchTools } from "@/lib/tools";
 import { rewriteQuery, getEmbeddings, convertClicResultsToXml, convertLegislationResultsToXml, convertJudgmentResultsToXml } from "./helper";
@@ -52,6 +54,7 @@ const chatRequestSchema = z.object({
 	agenticSearchEnabled: z.boolean().optional(),
 	// Dev panel override for the system prompt; absent => built-in searchPrompt.
 	systemPrompt: z.string().trim().min(1).max(SYSTEM_PROMPT_MAX_CHARS).optional(),
+	debugJudgmentSearch: z.boolean().optional(),
 	sessionId: correlationIdSchema.optional(),
 	userId: correlationIdSchema.optional(),
 });
@@ -100,11 +103,19 @@ function resolveMaxSteps(requested: number | undefined): number {
  * We handle timeouts per-query instead of using prisma.$use middleware.
  */
 
+async function collectSearchHits<T>(items: AsyncIterable<T>): Promise<T[]> {
+	const hits: T[] = [];
+	for await (const item of items) hits.push(item);
+	return hits;
+}
+
 async function handleLegacyChat(
 	messages: MyUIMessage[],
 	searchDepth: number,
 	onTraceComplete: TraceCompletion,
 	instructions?: string,
+	debugJudgmentSearch?: boolean,
+	abortSignal?: AbortSignal,
 ) {
 	// Build the model input and the retrieval query from the latest user message.
 	const modelMessages = await convertToModelMessages(messages);
@@ -115,16 +126,28 @@ async function handleLegacyChat(
 		? inputText
 		: inputText.filter((part) => part.type === "text").map((part) => part.text).join(" ");
 
-	const searchQueries = await startActiveObservation("rewrite-query", async (span) => {
-		span.update({ input: inputText });
-		const queries = (await rewriteQuery(modelMessages)).splice(0, 3); // Limit to top 3 queries
-		span.update({ output: queries });
-		return queries;
-	});
-	// console.log("searchQueries: ", searchQueries);
+	let terminal: ReturnType<typeof createSearchRequestTerminal> | undefined;
+	const reportError = (error: unknown) => {
+		terminal?.("request_error", searchErrorDetails(error));
+		onTraceComplete({ output: "", error });
+		return "An error occurred.";
+	};
 
 	const stream = createUIMessageStream<MyUIMessage>({
 		execute: async ({ writer }) => {
+			const requestDebug = createJudgmentSearchDebug("legacy", debugJudgmentSearch ? (entry) => {
+				writer.write({ type: "data-judgmentSearchDebug", data: entry, transient: true });
+			} : undefined);
+			requestDebug.log("request_start");
+			terminal = createSearchRequestTerminal(requestDebug, abortSignal);
+			abortSignal?.throwIfAborted();
+			const searchQueries = await requestDebug.stage("query_rewrite", () => startActiveObservation("rewrite-query", async (span) => {
+				span.update({ input: inputText });
+				const queries = (await rewriteQuery(modelMessages)).slice(0, 3);
+				span.update({ output: queries });
+				return queries;
+			}), (queries) => ({ queryCount: queries.length }));
+
 			// 1. Send initial status (transient - won't be added to message history)
 			writer.write({
 				type: "data-data",
@@ -161,38 +184,26 @@ async function handleLegacyChat(
 					input: { queries: searchQueries },
 				});
 
-				// T08: embed once per rewritten query, share across clic/judgment (/legislation in T10).
-				const queryEmbeddings = await Promise.all(searchQueries.map((q) => getEmbeddings(q)));
-
+				const retrieval = await retrieveSearchQueries(searchQueries, requestDebug, {
+					embed: getEmbeddings,
+					clic: (query, embedding) => collectSearchHits(searchClic(query, { embedding })),
+					judgments: (query, embedding, queryDebug, onPartial) =>
+						collectSearchHits(searchJudgmentSummary(query, { embedding, onPartial }, queryDebug)),
+				});
+				abortSignal?.throwIfAborted();
+				if (searchQueries.length > 0 && retrieval.completed === 0) throw new Error("All search queries failed");
+				for (const result of retrieval.clicLists.flat()) {
+					const existing = clicCandidates.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no);
+					if (!existing) clicCandidates.push(result);
+					else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+				}
 				const judgmentCandidates: JudgmentSummary[] = [];
-				await Promise.all([
-					...searchQueries.map(async (searchQuery, qi) => {
-						await startActiveObservation("search-clic", async (clicSpan) => {
-							clicSpan.update({ input: searchQuery });
-							let count = 0;
-							for await (const result of searchClic(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								const existing = clicCandidates.find((r) => r.nid === result.nid && r.chunk_no === result.chunk_no);
-								if (!existing) clicCandidates.push(result);
-								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
-								count++;
-							}
-							clicSpan.update({ output: { fusionCount: count } });
-						});
-					}),
-					...searchQueries.map(async (searchQuery, qi) => {
-						await startActiveObservation("search-judgment-summary", async (judgmentSpan) => {
-							judgmentSpan.update({ input: searchQuery });
-							let count = 0;
-							for await (const result of searchJudgmentSummary(searchQuery, { embedding: queryEmbeddings[qi] })) {
-								const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
-								if (!existing) judgmentCandidates.push(result);
-								else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
-								count++;
-							}
-							judgmentSpan.update({ output: { fusionCount: count } });
-						});
-					}),
-				]);
+				for (const result of retrieval.judgmentLists.flat()) {
+					const existing = judgmentCandidates.find((r) => r.judgmentId === result.judgmentId && r.documentId === result.documentId && r.chunk_no === result.chunk_no);
+					if (!existing) judgmentCandidates.push(result);
+					else if ((result.rrf_score ?? 0) > (existing.rrf_score ?? 0)) Object.assign(existing, result);
+				}
+				if (retrieval.partial) requestDebug.log("retrieval_partial");
 
 				// Global RRF order, cap rerank input, then ONE rerank per corpus.
 				const topByRrf = <T extends { rrf_score?: number | null }>(rows: T[]) =>
@@ -203,20 +214,22 @@ async function handleLegacyChat(
 						const out = await applyRerank(rerankQuery, topByRrf(clicCandidates), {
 							getText: (h) => h.content,
 							topN: RERANK_TOP_CLIC,
+							onFallback: (details) => requestDebug.log("rerank_fallback", { ...details, corpus: "clic" }),
 							usage: rerankUsage,
 						});
 						rspan.update({ input: rerankQuery, output: { candidates: Math.min(clicCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
 						return out;
 					}),
-					startActiveObservation("rerank-judgment", async (rspan) => {
+					requestDebug.stage("rerank", () => startActiveObservation("rerank-judgment", async (rspan) => {
 						const out = await applyRerank(rerankQuery, topByRrf(judgmentCandidates), {
 							getText: (h) => h.summary,
 							topN: RERANK_TOP_JUDGMENT,
+							onFallback: (details) => requestDebug.log("rerank_fallback", { ...details, corpus: "judgment" }),
 							usage: rerankUsage,
 						});
 						rspan.update({ input: rerankQuery, output: { candidates: Math.min(judgmentCandidates.length, RERANK_CANDIDATE_CAP), final: out.length } });
 						return out;
-					}),
+					}), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score != null).length })),
 				]);
 
 				// 3. Send message sources (deterministic order: clic, then judgment)
@@ -262,6 +275,7 @@ async function handleLegacyChat(
 					},
 				});
 			});
+			requestDebug.log("retrieval_end", { hitCount: judgmentResults.length });
 			let uniqueLegislationResults: LegislationSection[] = [];
 			// SQL Search - with error handling
 			if (searchDepth > 1) {
@@ -430,8 +444,10 @@ async function handleLegacyChat(
 			});
 			// console.log("modelMessages: ", modelMessages);
 
+			abortSignal?.throwIfAborted();
 			const result = await createLegacyChatAgent(instructions).stream({
 				prompt: modelMessages,
+				abortSignal,
 				onEnd({ usage, text, reasoningText }) {
 						const cost = calculateGpt6LunaCost(usage);
 						// T09: rerank cost is per API call (Cohere bills searches, not docs).
@@ -495,15 +511,27 @@ async function handleLegacyChat(
 					},
 				});
 
-			writer.merge(toUIMessageStream({
+			const answer = toUIMessageStream<Record<never, never>, MyUIMessage>({
 				stream: result.stream,
 				sendReasoning: true,
-				onError: (error) => {
-						onTraceComplete({ output: "", error });
-						return "An error occurred.";
-					},
-				}));
+				onError: reportError,
+			});
+			writer.merge(debugJudgmentSearch ? answer.pipeThrough(new TransformStream({
+				transform(chunk, controller) {
+					if (chunk.type === "finish") {
+						terminal?.(chunk.finishReason === "error" ? "request_error" : "request_end", {
+							finishReason: chunk.finishReason,
+						});
+					}
+					if (chunk.type === "abort") terminal?.("request_aborted");
+					controller.enqueue(chunk);
+				},
+				flush() {
+					terminal?.("request_error", { reason: "missing_finish" });
+				},
+			})) : answer);
 		},
+		onError: reportError,
 		onEnd: async () => {
 			onTraceComplete({ output: "" });
 			// Critical for serverless: flush traces after the response stream closes.
@@ -617,7 +645,8 @@ async function handleChatRequest(req: Request): Promise<Response> {
 					try {
 						if (searchMode === "agent") {
 							return await createAgenticChatResponse({
-								agent: createChatAgent(maxSteps, request.systemPrompt),
+								instructions: request.systemPrompt,
+								debugJudgmentSearch: request.debugJudgmentSearch,
 								messages: validated.data,
 								maxSteps,
 								abortSignal: req.signal,
@@ -625,7 +654,7 @@ async function handleChatRequest(req: Request): Promise<Response> {
 							});
 						}
 
-						return await handleLegacyChat(validated.data, searchDepth, completeTrace, request.systemPrompt);
+						return await handleLegacyChat(validated.data, searchDepth, completeTrace, request.systemPrompt, request.debugJudgmentSearch, req.signal);
 					} catch (error) {
 						completeTrace({ output: "", error });
 						await langfuseSpanProcessor.forceFlush();

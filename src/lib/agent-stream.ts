@@ -1,8 +1,9 @@
 import type { InferUIMessageChunk, LanguageModelUsage, TextStreamPart } from "ai";
-import { convertToModelMessages, createUIMessageStreamResponse, toUIMessageStream } from "ai";
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, toUIMessageStream } from "ai";
 
 import { langfuseSpanProcessor } from "@/instrumentation";
-import type { ChatAgent } from "@/lib/chat-agent";
+import { createJudgmentSearchDebug, createSearchRequestTerminal, searchErrorDetails } from "@/lib/judgment-search-debug";
+import { createChatAgent } from "@/lib/chat-agent";
 import { calculateGpt6LunaCost } from "@/lib/pricing";
 import {
   caseToolOutputSchema,
@@ -13,7 +14,7 @@ import {
   ordinanceSectionToolOutputSchema,
   searchTools,
 } from "@/lib/tools";
-import type { MyMetadata, MyUIMessage } from "@/lib/types";
+import type { JudgmentSearchDebugEvent, JudgmentSearchDebugSink, MyMetadata, MyUIMessage } from "@/lib/types";
 import { z } from "zod";
 
 type ChatChunk = InferUIMessageChunk<MyUIMessage>;
@@ -301,13 +302,15 @@ function toMetadata({
 }
 
 export async function createAgenticChatResponse({
-  agent,
+  instructions,
+  debugJudgmentSearch,
   messages,
   maxSteps,
   abortSignal,
   onTraceComplete,
 }: {
-  agent: ChatAgent;
+  instructions?: string;
+  debugJudgmentSearch?: boolean;
   messages: MyUIMessage[];
   maxSteps: number;
   abortSignal?: AbortSignal;
@@ -319,12 +322,23 @@ export async function createAgenticChatResponse({
   let outputText = "";
   let streamError: unknown;
   const toolNamesByCallId = new Map<string, SearchToolName>();
+  const toolStartedAt = new Map<string, { at: number; step: number }>();
+  let stepStartedAt = 0;
   const emittedSourceIds = new Set<string>();
 
-  const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
-  const result = await agent.stream({
-    prompt: modelMessages,
-    abortSignal,
+  const pendingDebugEvents: JudgmentSearchDebugEvent[] = [];
+  let emitDebug: JudgmentSearchDebugSink = (entry) => pendingDebugEvents.push(entry);
+  const debugSink: JudgmentSearchDebugSink | undefined = debugJudgmentSearch ? (entry) => emitDebug(entry) : undefined;
+  const debug = createJudgmentSearchDebug("agent", debugSink);
+  debug.log("request_start");
+  const terminal = createSearchRequestTerminal(debug, abortSignal);
+  const agent = createChatAgent(maxSteps, instructions, debugSink);
+  const result = await (async () => {
+    const modelMessages = await convertToModelMessages(messages, { tools: agent.tools });
+    return agent.stream({ prompt: modelMessages, abortSignal });
+  })().catch((error: unknown) => {
+    terminal("request_error", searchErrorDetails(error));
+    throw error;
   });
 
   const trackedStream = result.stream.pipeThrough(
@@ -339,8 +353,49 @@ export async function createAgenticChatResponse({
         if (chunk.type === "error") {
           streamError = chunk.error;
         }
+        if (chunk.type === "abort") terminal("request_aborted");
         if (chunk.type === "finish") {
           usage = chunk.totalUsage;
+        }
+        if (debugJudgmentSearch) {
+          if (chunk.type === "start-step") {
+            stepStartedAt = performance.now();
+            debug.log("step_start", { step: stepCount, toolsAvailable: stepCount < maxSteps });
+          }
+          if (chunk.type === "finish-step") {
+            debug.log("step_end", {
+              step: stepCount,
+              durationMs: Math.round(performance.now() - stepStartedAt),
+              finishReason: chunk.finishReason,
+            });
+          }
+          if (chunk.type === "tool-call") {
+            toolStartedAt.set(chunk.toolCallId, { at: performance.now(), step: stepCount });
+            debug.log("tool_start", { tool: chunk.toolName, toolCallId: chunk.toolCallId, step: stepCount });
+          }
+          if ((chunk.type === "tool-result" && !chunk.preliminary) || chunk.type === "tool-error" || chunk.type === "tool-output-denied") {
+            const start = toolStartedAt.get(chunk.toolCallId);
+            toolStartedAt.delete(chunk.toolCallId);
+            const details = {
+              tool: chunk.toolName,
+              toolCallId: chunk.toolCallId,
+              step: start?.step ?? stepCount,
+              durationMs: start ? Math.round(performance.now() - start.at) : undefined,
+            };
+            if (chunk.type === "tool-error") {
+              debug.log("tool_error", { ...details, ...searchErrorDetails(chunk.error) });
+            } else if (chunk.type === "tool-output-denied") {
+              debug.log("tool_error", { ...details, reason: "denied" });
+            } else {
+              const output: unknown = chunk.output;
+              if (output && typeof output === "object" && "error" in output && typeof output.error === "string") {
+                debug.log("tool_error", { ...details, ...searchErrorDetails(output.error) });
+              } else {
+                const hitCount = toolDebugHitCount(output);
+                debug.log("tool_end", { ...details, hitCount });
+              }
+            }
+          }
         }
         controller.enqueue(chunk);
       },
@@ -408,6 +463,11 @@ export async function createAgenticChatResponse({
             }),
           });
         }
+        terminal(streamError === undefined ? "request_end" : "request_error", {
+          toolCallCount: toolNamesByCallId.size,
+          judgmentToolRequested: [...toolNamesByCallId.values()].some((name) => name === "search_judgments" || name === "full_search"),
+          ...(streamError === undefined ? {} : searchErrorDetails(streamError)),
+        });
         onTraceComplete({
           output: outputText,
           ...(streamError === undefined ? {} : { error: streamError }),
@@ -425,7 +485,24 @@ export async function createAgenticChatResponse({
     }),
   );
 
-  return createUIMessageStreamResponse({ stream: transformed });
+  if (!debugJudgmentSearch) return createUIMessageStreamResponse({ stream: transformed });
+
+  const stream = createUIMessageStream<MyUIMessage>({
+    execute({ writer }) {
+      emitDebug = (entry) => writer.write({ type: "data-judgmentSearchDebug", data: entry, transient: true });
+      pendingDebugEvents.splice(0).forEach(emitDebug);
+      writer.merge(transformed);
+    },
+  });
+  return createUIMessageStreamResponse({ stream });
+}
+
+function toolDebugHitCount(output: unknown): number | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  if ("paragraphs" in output && Array.isArray(output.paragraphs)) return output.paragraphs.length;
+  if ("sections" in output && Array.isArray(output.sections)) return output.sections.length;
+  if ("results" in output && Array.isArray(output.results)) return output.results.length;
+  if ("cases" in output && Array.isArray(output.cases)) return output.cases.length;
 }
 
 function isSearchToolName(value: string): value is SearchToolName {

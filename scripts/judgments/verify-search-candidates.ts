@@ -19,9 +19,15 @@ async function main(){
    const hits=await searchFulltext('boundarymarker',cjkTokens('boundarymarker'),embedding,['en']);const hit=hits.find(h=>h.judgmentId===6);assert(hit?.documentId);assert.equal(hit.sourceAnchor,'p1');assert.equal(new URL(hit.url??'').origin,'https://hklii.hk');
    const doc=await getFulltext(6,hit.startPosition??0,hit.endPosition??0,'none',20);assert.equal(new URL(doc.document.url).origin,'https://hklii.hk');assert(doc.paragraphs.some(p=>p.content.includes('Boundarymarker original judgment passage.')));
   }
+  const vectorOnly = (await searchFulltext('unmatchedmarker','unmatchedmarker',vector,['en']))
+   .find(hit=>hit.judgmentId===6);
+  assert(vectorOnly);
+  assert.equal(vectorOnly.lexical_rank,null);
+  assert.equal(vectorOnly.vector_distance,0);
   assert.equal((await searchFulltext('boundarymarker','boundarymarker',null,['tc'])).length,0);
+  assert(!(await searchFulltext('unmatchedmarker','unmatchedmarker',vector,['tc'])).some(h=>h.judgmentId===6));
   await fs.writeFile(source,JSON.stringify({content:'<p>Replacement with no old marker.</p>'}));await importCorpus(config);
-  assert(!(await searchFulltext('boundarymarker','boundarymarker',vector,['en'])).some(h=>h.judgmentId===6));
+  assert(!(await searchFulltext('unmatchedmarker','unmatchedmarker',vector,['en'])).some(h=>h.judgmentId===6));
   const chinese=await getFulltext(1,999,999,'none',20,'0','0',{paragraphLabel:'1',languageCode:'tc'});assert.equal(chinese.document.judgment_id,3);assert.equal(chinese.document.languageCode,'tc');assert(chinese.paragraphs.length>0&&chinese.paragraphs.every(p=>p.label==='1'));assert(chinese.paragraphs.some(p=>p.content.includes('業主')));
   await assert.rejects(getFulltext(1,0,99,'none',20,'0','0',{paragraphLabel:'999',languageCode:'tc'}),/printed paragraph label/);
   await assert.rejects(getFulltext(1,0,99,'none',20,'0','0',{paragraphLabel:'1',languageCode:'sc'}),/requested language/);

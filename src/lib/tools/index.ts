@@ -10,24 +10,29 @@
  * candidates). Each item carries both rrf_score and rerank_score (null when rerank
  * is disabled/failed — applyRerank already falls back to fusion order internally).
  */
-import { searchClicTool } from "./search-clic";
-import { searchJudgmentsTool } from "./search-judgments";
-import { searchLegislationTool } from "./search-legislation";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
+import { createSearchClicTool } from "./search-clic";
+import { createSearchJudgmentsTool } from "./search-judgments";
+import { createSearchLegislationTool } from "./search-legislation";
 import { getOrdinanceSectionTool } from "./get-ordinance-section";
 import { getCaseTool } from "./get-case";
-import { fullSearchTool } from "./full-search";
+import { createFullSearchTool } from "./full-search";
 import { askQuestionTool } from "./ask-question";
 
 /** Tool set for the agent loop. Keys are the model-visible names. */
-export const searchTools = {
-	search_clic: searchClicTool,
-	search_judgments: searchJudgmentsTool,
-	search_legislation: searchLegislationTool,
-	get_ordinance_section: getOrdinanceSectionTool,
-	get_case: getCaseTool,
-	full_search: fullSearchTool,
-	ask_question: askQuestionTool,
-};
+export function createSearchTools(debug?: JudgmentSearchDebugSink) {
+	return {
+		search_clic: createSearchClicTool(debug),
+		search_judgments: createSearchJudgmentsTool(debug),
+		search_legislation: createSearchLegislationTool(debug),
+		get_ordinance_section: getOrdinanceSectionTool,
+		get_case: getCaseTool,
+		full_search: createFullSearchTool(debug),
+		ask_question: askQuestionTool,
+	};
+}
+
+export const searchTools = createSearchTools();
 
 export { searchClicTool } from "./search-clic";
 export type { ClicToolItem, ClicToolOutput } from "./search-clic";

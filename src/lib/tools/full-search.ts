@@ -1,3 +1,6 @@
+import { retrieveSearchQueries } from "@/lib/search-fanout";
+import { createJudgmentSearchDebug, searchErrorDetails } from "@/lib/judgment-search-debug";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import { tool } from "ai";
 import { z } from "zod";
 import { sourceFields, judgmentSourceMetadata } from "@/lib/judgment-fulltext";
@@ -9,7 +12,6 @@ import {
 	type JudgmentChunkHit,
 } from "@/lib/pg-search";
 import { getEmbeddings } from "@/lib/clic-api";
-import { applyRerank } from "@/lib/rerank";
 import {
 	TOOL_TIMEOUT_MS,
 	FULL_SEARCH_TOOL_TIMEOUT_MS,
@@ -21,6 +23,7 @@ import {
 	FULL_SEARCH_LEGISLATION_SNIPPET_CHARS,
 	withTimeout,
 	withToolSpan,
+	fuseRerank,
 	errorPayloadSchema,
 } from "./shared";
 
@@ -93,6 +96,7 @@ export const fullSearchOutputSchema = z.union([
 	z.strictObject({
 		searchQueries: z.array(z.string()),
 		results: z.array(fullSearchResultItemSchema).describe("Global top-10 across all corpora, best first. Scores are comparable across kinds (single rerank call)."),
+		partial: z.literal(true).optional().describe("Some sources could not be searched."),
 	}),
 	errorPayloadSchema,
 ]);
@@ -111,7 +115,7 @@ function mergeBestRrf<T>(lists: T[][], key: (item: T) => string, score: (item: T
 	return [...best.values()];
 }
 
-export const fullSearchTool = tool({
+export const createFullSearchTool = (onDebug?: JudgmentSearchDebugSink) => tool({
 	description:
 		"Broad multi-query search across CLIC articles, judgment summaries, and the legislation graph in a single call. " +
 		"Provide 1-3 related queries (same question from different angles); the tool searches every corpus, pools ALL candidates, reranks them together, and returns the global top 10. " +
@@ -119,36 +123,41 @@ export const fullSearchTool = tool({
 		"Returns snippets only — call get_ordinance_section / get_case for exact text before quoting.",
 	inputSchema: fullSearchInput,
 	outputSchema: fullSearchOutputSchema,
-	execute: async (args: FullSearchInput): Promise<FullSearchOutput> => {
+	execute: async (args: FullSearchInput, { toolCallId }): Promise<FullSearchOutput> => {
+		const debug = createJudgmentSearchDebug("full_search", onDebug, toolCallId);
+		debug.log("start", { toolBudgetMs: FULL_SEARCH_TOOL_TIMEOUT_MS });
 		try {
-			return await withTimeout(
+			const output = await withTimeout(
 				withToolSpan("tool:full_search", args, async () => {
 					const searchQueries = args.queries.map((q) => q.trim()).filter((q) => q.length > 0).slice(0, 3);
-					if (searchQueries.length === 0) return { error: "full_search: queries must not be empty" };
-					const primaryQuery = searchQueries[0] as string;
+					const [primaryQuery] = searchQueries;
+					if (primaryQuery === undefined) {
+						debug.log("error", { reason: "invalid_query" });
+						return { error: "full_search: queries must not be empty" };
+					}
 					const searchDepth = args.searchDepth ?? 2;
 
 					// 1. Embed once per query, fan out across CLIC + judgments (no lane filter, like the legacy route).
-					const embeddings = await Promise.all(searchQueries.map((q) => getEmbeddings(q)));
-					const clicLists = await Promise.all(
-						searchQueries.map((q, i) =>
-							searchClicChunks(q, { embedding: embeddings[i] }).catch((): ClicChunkHit[] => []),
-						),
-					);
-					const judgmentLists = await Promise.all(
-						searchQueries.map((q, i) =>
-							searchJudgmentChunks(q, { embedding: embeddings[i] }).catch((): JudgmentChunkHit[] => []),
-						),
-					);
+					const retrieval = await retrieveSearchQueries(searchQueries, debug, {
+						embed: getEmbeddings,
+						clic: (query, embedding) => searchClicChunks(query, { embedding }),
+						judgments: (query, embedding, queryDebug, onPartial) =>
+							searchJudgmentChunks(query, { embedding, onPartial }, queryDebug),
+					});
+					if (retrieval.completed === 0) {
+						debug.log("error", { reason: "all_queries_failed" });
+						return { error: "full_search: all search queries failed" };
+					}
+					let partial = retrieval.partial;
 
 					// 2. Cross-query merge/dedupe (best rrf wins), global RRF order, cap rerank input.
 					const topByRrf = <T extends { rrf_score?: number | null }>(rows: T[]): T[] =>
 						[...rows].sort((a, b) => (b.rrf_score ?? 0) - (a.rrf_score ?? 0)).slice(0, FULL_SEARCH_MERGE_CAP);
 					const clicMerged = topByRrf(
-						mergeBestRrf(clicLists, (h) => `${h.nid}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
+						mergeBestRrf(retrieval.clicLists, (h) => `${h.nid}:${h.chunk_no}`, (h) => h.rrf_score ?? 0),
 					);
 					const judgmentMerged = topByRrf(
-						mergeBestRrf(judgmentLists, (hit) => `${hit.judgmentId}:${hit.documentId ?? "summary"}:${hit.chunk_no}`, (hit) => hit.rrf_score ?? 0),
+						mergeBestRrf(retrieval.judgmentLists, (hit) => `${hit.judgmentId}:${hit.documentId ?? "summary"}:${hit.chunk_no}`, (hit) => hit.rrf_score ?? 0),
 					);
 
 					// 3. Legislation graph walk from the merged CLIC nids (mirror of the legacy route).
@@ -173,7 +182,7 @@ export const fullSearchTool = tool({
 					if (searchDepth > 1) {
 						const nids = [...new Set(clicMerged.map((h) => h.nid))];
 						if (nids.length > 0) {
-							const rows = await withTimeout(
+							const rows = await debug.stage("legislation_graph", () => withTimeout(
 								prisma.clicPage.findMany({
 									where: { nid: { in: nids } },
 									include: {
@@ -201,7 +210,10 @@ export const fullSearchTool = tool({
 								}),
 								TOOL_TIMEOUT_MS,
 								"full_search graph",
-							);
+							)).catch(() => {
+								partial = true;
+								return [];
+							});
 							const seen = new Set<string>();
 							const push = (section: FullSearchGraphRow): void => {
 								const key = `${section.capNumber}\u00a7${section.sectionNumber}`;
@@ -250,29 +262,10 @@ export const fullSearchTool = tool({
 						if (candidate.kind === "judgment") return candidate.hit.content;
 						return candidate.section.content.slice(0, FULL_SEARCH_RERANK_TEXT_CHARS);
 					};
-					let ranked: { item: FullSearchPoolItem; rerank_score: number | null }[];
-					if (pool.length === 0) {
-						ranked = [];
-					} else {
-						try {
-							const reranked = await withTimeout(
-								applyRerank(primaryQuery, pool, {
-									getText: poolText,
-									topN: FULL_SEARCH_TOP_N,
-									timeoutMs: FULL_SEARCH_RERANK_TIMEOUT_MS,
-								}),
-								FULL_SEARCH_RERANK_TIMEOUT_MS,
-								"full_search rerank",
-							);
-							ranked = reranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
-						} catch {
-							// Rerank unavailable: pool is already in fusion order (graph items sink).
-							ranked = [...pool]
-								.sort((a, b) => poolRrf(b) - poolRrf(a))
-								.slice(0, FULL_SEARCH_TOP_N)
-								.map((item) => ({ item, rerank_score: null }));
-						}
-					}
+					const ranked = await debug.stage("rerank", () => fuseRerank(primaryQuery, pool, poolText, FULL_SEARCH_TOP_N, {
+						timeoutMs: FULL_SEARCH_RERANK_TIMEOUT_MS,
+						onFallback: (details) => debug.log("rerank_fallback", details),
+					}), (rows) => ({ hitCount: rows.length, scoredCount: rows.filter((row) => row.rerank_score !== null).length }));
 					const top = ranked.slice(0, FULL_SEARCH_TOP_N);
 
 					// 5. Attach caseAct/caseTitle identifiers for get_case follow-ups (ranked hits only).
@@ -295,6 +288,7 @@ export const fullSearchTool = tool({
 
 					return {
 						searchQueries,
+						partial: partial ? true as const : undefined,
 						results: top.map(({ item, rerank_score }): FullSearchResultItem => {
 							if (item.kind === "clic") {
 								return {
@@ -343,8 +337,17 @@ export const fullSearchTool = tool({
 				FULL_SEARCH_TOOL_TIMEOUT_MS,
 				"full_search",
 			);
+			if (output.results) debug.log("end", {
+				hitCount: output.results.length,
+				judgmentHitCount: output.results.filter((hit) => hit.kind === "judgment").length,
+				partial: output.partial,
+			});
+			return output;
 		} catch (err) {
+			debug.log("error", searchErrorDetails(err));
 			return { error: `full_search failed: ${err instanceof Error ? err.message : String(err)}` };
 		}
 	},
 });
+
+export const fullSearchTool = createFullSearchTool();

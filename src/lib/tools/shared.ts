@@ -2,7 +2,7 @@
 
 import { z } from "zod";
 import { startActiveObservation } from "@langfuse/tracing";
-import { applyRerank } from "@/lib/rerank";
+import { applyRerank, type RerankFallback } from "@/lib/rerank";
 
 export const TOOL_TIMEOUT_MS = 10_000;
 /** Outer budget for full_search: LLM rewrite + 3 embeddings + fan-out + 2 reranks + graph SQL. */
@@ -23,6 +23,7 @@ export const FULL_SEARCH_LEGISLATION_SNIPPET_CHARS = 500;
 // the substring fallback (single indexed query) needs far less, so it gets the remainder.
 export const PRIMARY_SEARCH_BUDGET_MS = 7_000;
 export const SEARCH_FALLBACK_BUDGET_MS = TOOL_TIMEOUT_MS - PRIMARY_SEARCH_BUDGET_MS - 250;
+export const PARALLEL_RETRIEVAL_BUDGET_MS = 25_000;
 export const RERANK_TIMEOUT_MS = 4_000;
 export const RERANK_TOP_CLIC = 10;
 export const RERANK_TOP_JUDGMENT = 8;
@@ -46,10 +47,16 @@ export const CLIC_TOPIC_ALIASES: Readonly<Record<string, string>> = {
 export type ErrorPayload = { error: string };
 export const errorPayloadSchema = z.strictObject({ error: z.string() });
 
+export class ToolTimeoutError extends Error {
+	constructor(label: string, readonly timeoutMs: number) {
+		super(`[tool] ${label} timed out after ${timeoutMs}ms`);
+	}
+}
+
 export function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
 	let timer: ReturnType<typeof setTimeout>;
 	const timeout = new Promise<never>((_, reject) => {
-		timer = setTimeout(() => reject(new Error(`[tool] ${label} timed out after ${ms}ms`)), ms);
+		timer = setTimeout(() => reject(new ToolTimeoutError(label, ms)), ms);
 	});
 	return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
@@ -58,15 +65,27 @@ export async function withSearchFallback<T>(
 	primary: () => Promise<T>,
 	fallback: () => Promise<T>,
 	label: string,
-	isUsable: (value: T) => boolean = () => true,
+	{
+		isUsable = () => true,
+		primaryBudgetMs = PRIMARY_SEARCH_BUDGET_MS,
+		fallbackBudgetMs = SEARCH_FALLBACK_BUDGET_MS,
+		onFallback,
+	}: {
+		isUsable?: (value: T) => boolean;
+		primaryBudgetMs?: number;
+		fallbackBudgetMs?: number;
+		onFallback?: (event: { reason: "no_usable_result" } | { reason: "timeout" | "error"; error: unknown }) => void;
+	} = {},
 ): Promise<T> {
+	let fallbackReason: Parameters<NonNullable<typeof onFallback>>[0] = { reason: "no_usable_result" };
 	try {
-		const result = await withTimeout(primary(), PRIMARY_SEARCH_BUDGET_MS, `${label} primary`);
+		const result = await withTimeout(primary(), primaryBudgetMs, `${label} primary`);
 		if (isUsable(result)) return result;
-	} catch {
-		/* fall through to the bounded direct lookup */
+	} catch (error) {
+		fallbackReason = { reason: error instanceof ToolTimeoutError ? "timeout" : "error", error };
 	}
-	return await withTimeout(fallback(), SEARCH_FALLBACK_BUDGET_MS, `${label} fallback`);
+	onFallback?.(fallbackReason);
+	return await withTimeout(fallback(), fallbackBudgetMs, `${label} fallback`);
 }
 
 export function summarizeForSpan(value: unknown): unknown {
@@ -99,17 +118,27 @@ export async function fuseRerank<T>(
 	items: T[],
 	getText: (item: T) => string,
 	topN: number,
+	{ timeoutMs = RERANK_TIMEOUT_MS, onFallback }: { timeoutMs?: number; onFallback?: (details: RerankFallback) => void } = {},
 ): Promise<{ item: T; rerank_score: number | null }[]> {
 	const fallback = () => items.slice(0, topN).map((item) => ({ item, rerank_score: null }));
-	if (items.length === 0) return [];
+	if (items.length === 0) {
+		onFallback?.({ reason: "no_candidates" });
+		return [];
+	}
+	let degradation: RerankFallback | undefined;
 	try {
 		const ranked = await withTimeout(
-			applyRerank(query, items, { getText, topN, timeoutMs: RERANK_TIMEOUT_MS }),
-			RERANK_TIMEOUT_MS,
+			applyRerank(query, items, {
+				getText, topN, timeoutMs,
+				onFallback: (details) => { degradation = details; },
+			}),
+			timeoutMs,
 			"rerank",
 		);
+		if (degradation) onFallback?.(degradation);
 		return ranked.map((r) => ({ item: r.item, rerank_score: r.rerank_score ?? null }));
-	} catch {
+	} catch (error) {
+		onFallback?.(error instanceof ToolTimeoutError ? { reason: "timeout", timeoutMs } : { reason: "error" });
 		return fallback();
 	}
 }

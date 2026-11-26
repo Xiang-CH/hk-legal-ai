@@ -1,3 +1,5 @@
+import { createJudgmentSearchDebug } from "@/lib/judgment-search-debug";
+import type { JudgmentSearchDebugSink } from "@/lib/types";
 import { tool } from "ai";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -140,12 +142,13 @@ async function fallbackClicOutput(args: SearchClicInput): Promise<ClicToolOutput
 }
 
 /** search_clic: T08 CLIC fusion top-30 -> dedupe -> T09 rerank -> top-10. */
-export const searchClicTool = tool({
+export const createSearchClicTool = (onDebug?: JudgmentSearchDebugSink) => tool({
 	description:
 		"Search CLIC legal-information articles (Postgres fusion: lexical + vector, RRF). Returns the final top-10 post-rerank chunks with snippets.",
 	inputSchema: searchClicInput,
 	outputSchema: clicToolOutputSchema,
-	execute: async (args: SearchClicInput): Promise<ClicToolOutput> => {
+	execute: async (args: SearchClicInput, { toolCallId }): Promise<ClicToolOutput> => {
+		const debug = createJudgmentSearchDebug("search_clic", onDebug, toolCallId);
 		try {
 			return await withTimeout(
 				withToolSpan("tool:search_clic", args, async () => {
@@ -154,7 +157,9 @@ export const searchClicTool = tool({
 						const embedding = await getEmbeddings(args.query);
 						const hits = await searchClicChunksWithFallback(args.query, embedding, args);
 						const unique = dedupe(hits, (h: ClicChunkHit) => `${h.nid}:${h.chunk_no}`);
-						const ranked = await fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_CLIC);
+						const ranked = await fuseRerank(args.query, unique, (h) => h.content, RERANK_TOP_CLIC, {
+							onFallback: (details) => debug.log("rerank_fallback", details),
+						});
 						return {
 							results: ranked.map(({ item, rerank_score }) => ({
 								nid: item.nid,
@@ -166,7 +171,9 @@ export const searchClicTool = tool({
 								rerank_score,
 							})),
 						};
-					}, () => fallbackClicOutput(args), "search_clic", (output) => !("results" in output) || output.results.length > 0);
+					}, () => fallbackClicOutput(args), "search_clic", {
+						isUsable: (output) => !("results" in output) || output.results.length > 0,
+					});
 				}),
 				TOOL_TIMEOUT_MS,
 				"search_clic",
@@ -176,3 +183,5 @@ export const searchClicTool = tool({
 		}
 	},
 });
+
+export const searchClicTool = createSearchClicTool();
